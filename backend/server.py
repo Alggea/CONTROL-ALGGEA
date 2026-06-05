@@ -654,6 +654,41 @@ async def delete_provider(provider_id: str, user: dict = Depends(get_current_use
 @api.post("/reimbursements", response_model=ReimbursementOut)
 async def create_reimbursement(payload: ReimbursementIn, user: dict = Depends(get_current_user)):
     doc = payload.model_dump()
+
+    # Validate source_transaction_ids if provided:
+    # 1) each tx must exist, be a personal expense of this partner
+    # 2) none may be already linked to another reimbursement (prevents double-count)
+    src_ids = list(dict.fromkeys(doc.get("source_transaction_ids") or []))  # dedupe, preserve order
+    if src_ids:
+        txs = await db.transactions.find(
+            {"id": {"$in": src_ids}}, {"_id": 0, "id": 1, "partner_id": 1, "type": 1, "paid_personally": 1, "description": 1}
+        ).to_list(len(src_ids))
+        tx_by_id = {t["id"]: t for t in txs}
+        for tid in src_ids:
+            t = tx_by_id.get(tid)
+            if not t:
+                raise HTTPException(409, "Uno de los egresos seleccionados ya no existe.")
+            if t.get("type") != "expense" or not t.get("paid_personally"):
+                raise HTTPException(409, "Solo egresos pagados personalmente pueden vincularse a un reembolso.")
+            if t.get("partner_id") != doc.get("partner_id"):
+                raise HTTPException(409, "Un egreso seleccionado no pertenece a este socio.")
+
+        already = await db.reimbursements.find_one(
+            {"source_transaction_ids": {"$in": src_ids}},
+            {"_id": 0, "id": 1, "source_transaction_ids": 1},
+        )
+        if already:
+            dup = next((x for x in already.get("source_transaction_ids", []) if x in src_ids), None)
+            dup_desc = (tx_by_id.get(dup, {}) or {}).get("description", "") if dup else ""
+            raise HTTPException(
+                409,
+                "Ese egreso ya fue reembolsado anteriormente"
+                + (f" ({dup_desc})." if dup_desc else "."),
+            )
+        doc["source_transaction_ids"] = src_ids
+    else:
+        doc["source_transaction_ids"] = []
+
     doc["id"] = str(uuid.uuid4())
     stamp_create(doc, user)
     await db.reimbursements.insert_one(doc.copy())
@@ -823,14 +858,27 @@ async def partners_portal(_: dict = Depends(get_current_user)):
     available_to_distribute = net_balance - total_dividends
 
     partners_data = []
+    # Pre-compute global set of linked source ids
+    global_linked_ids = set()
+    for r in rbs:
+        for tid in r.get("source_transaction_ids", []) or []:
+            global_linked_ids.add(tid)
     for u in users:
         pid = u["id"]
-        personal_total = sum(
-            t["amount"] for t in txs
+        personal_txs = [
+            t for t in txs
             if t["partner_id"] == pid and t.get("paid_personally") and t["type"] == "expense"
+        ]
+        personal_total = sum(t["amount"] for t in personal_txs)
+        # Source-of-truth: a personal expense counts as reimbursed only if it is
+        # actually linked to a reimbursement. Manual reimbursements with no
+        # source_transaction_ids do NOT reduce the outstanding loan balance.
+        linked_personal_amount = sum(
+            t["amount"] for t in personal_txs if t["id"] in global_linked_ids
         )
-        reimbursed_total = sum(r["amount"] for r in rbs if r["partner_id"] == pid)
-        outstanding = personal_total - reimbursed_total
+        outstanding = personal_total - linked_personal_amount
+        # Cash actually paid back to this partner (for the cash-out widget)
+        cash_reimbursed = sum(r["amount"] for r in rbs if r["partner_id"] == pid)
         dividends_withdrawn = sum(d["amount"] for d in divs if d["partner_id"] == pid)
         available = per_partner_share + outstanding - dividends_withdrawn
         partners_data.append({
@@ -842,7 +890,8 @@ async def partners_portal(_: dict = Depends(get_current_user)):
             "share_percent": share_pct * 100,
             "profit_share": per_partner_share,
             "personal_payments_total": personal_total,
-            "reimbursed_total": reimbursed_total,
+            "reimbursed_total": linked_personal_amount,
+            "cash_reimbursed_total": cash_reimbursed,
             "personal_payments_owed": outstanding,
             "dividends_withdrawn": dividends_withdrawn,
             "available_to_collect": available,

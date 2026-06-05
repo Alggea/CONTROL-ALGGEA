@@ -1,0 +1,66 @@
+{
+  "summary": "Iteration 8: validated the reimbursement duplicate-loan bug fix. Backend (10/10 pytest passed) + Frontend (full UI flow passed) — Préstamos Pendientes now zeroes out exactly when expenses are linked, no more duplication. All listed acceptance criteria pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8_reimbursements.py",
+    "/app/test_reports/pytest/pytest_iteration8.xml"
+  ],
+  "tests_executed": {
+    "backend": [
+      "TestLoginBasics::test_ana_login PASSED",
+      "TestLoginBasics::test_invalid_password PASSED",
+      "TestReimbursementManual::test_manual_reimbursement_does_not_reduce_outstanding PASSED",
+      "TestReimbursementLinked::test_linked_reimbursement_reduces_outstanding_exactly PASSED",
+      "TestReimbursementValidations::test_double_link_same_tx_returns_409 PASSED",
+      "TestReimbursementValidations::test_cross_partner_link_returns_409 PASSED",
+      "TestReimbursementValidations::test_nonexistent_tx_link_returns_409 PASSED",
+      "TestDeleteTxLock::test_delete_pending_personal_expense_blocked_409 PASSED",
+      "TestDeleteTxLock::test_delete_reimbursed_personal_expense_allowed_200 PASSED",
+      "TestPortalSemantics::test_reimbursed_total_vs_cash_reimbursed_total PASSED"
+    ],
+    "frontend": [
+      "Login + must_change_password redirect to /cambiar-contrasena -> PASSED",
+      "Password change Bienvenido2026! -> Test2026! (Luis) -> PASSED",
+      "Open reimburse form, submit DISABLED when nothing selected + checkbox unchecked -> PASSED",
+      "manual-confirm-label visible when hasPending && noneSelected -> PASSED",
+      "Ticking manual-confirm-checkbox ENABLES submit -> PASSED",
+      "Selecting 2 pending tx auto-fills reimbursement-amount = sum (73.00) -> PASSED",
+      "After submit, partner card: personal_payments_owed=$17 (only the unselected exp) + 'ya reembolsado'=$73 (no duplication) -> PASSED",
+      "Transactions table: delete-tx button for status-pending row is disabled + cursor-not-allowed + slate-300 -> PASSED",
+      "Transactions table: delete-tx button for status-reimbursed row is enabled (no cursor-not-allowed) -> PASSED"
+    ]
+  },
+  "critical_code_review_comments": [
+    "server.py lines 660-690 (create_reimbursement validation): correct — dedupe of source_transaction_ids, existence check, type/paid_personally check, partner_id match, double-link check via $in. Returns 409 with descriptive message. No issues found.",
+    "server.py lines 505-523 (delete_tx lock): correctly blocks deletion of paid_personally expenses with no linked reimbursement. Returns 409 with partner name + actionable message. Verified.",
+    "server.py lines 866-898 (partners_portal): reimbursed_total now derived from sum of personal expenses linked via global_linked_ids (source-of-truth). cash_reimbursed_total separately tracks money paid out. outstanding = personal_total - linked_personal_amount. This is the correct fix for the duplication bug.",
+    "PartnerPortal.jsx line 152 (needsManualConfirm): correctly gates the submit button when hasPending && noneSelected && !confirmManual. data-testids 'manual-confirm-checkbox' + 'manual-confirm-label' present.",
+    "Transactions.jsx line 562-573: delete button correctly disabled when reimbursement_status==='pending' with cursor-not-allowed + text-slate-300 + helpful tooltip.",
+    "Minor (non-blocking): server.py file is 1458 lines — could be split into modules (auth.py, transactions.py, reimbursements.py, etc.) but not required to fix this bug."
+  ],
+  "updated_files": [],
+  "files_created": [
+    "/app/backend/tests/test_iteration8_reimbursements.py",
+    "/app/test_reports/iteration_8.json",
+    "/app/test_reports/pytest/pytest_iteration8.xml"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": {
+    "ana.narvaez@socios.com": "Bienvenido2026! (still must_change_password=true at end of test)",
+    "gabriel.barron@socios.com": "Bienvenido2026! (still must_change_password=true)",
+    "luis.noguez@socios.com": "Test2026! (CHANGED during UI test - was Bienvenido2026!, must_change_password now false)"
+  },
+  "seed_data_creation": "During UI test created 3 personal expenses for Luis ($50, $23, $17) + 1 linked reimbursement of $73 (linked $50+$23). Cleaned up at end: deleted the $50 and $23 tx + the reimbursement. The $17 tx (id acc7f75c-1f5b-47c9-a533-186fbace34b2) remains as a pending personal-expense and could NOT be deleted (server correctly returned 409 because no reimbursement linked — proves the lock works). Description 'TEST_UI_17'. Next agent may want to register a reimbursement linking it, then delete.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All reimbursement bug-fix acceptance criteria pass on both backend and frontend. Luis password was changed to Test2026! (Bienvenido2026! no longer works for Luis). Ana and Gabriel still on default password requiring change. One leftover TEST tx remains for Luis ($17, id acc7f75c-1f5b-47c9-a533-186fbace34b2) — intentionally kept as it documents the lock behavior. Backend pytest suite /app/backend/tests/test_iteration8_reimbursements.py can be re-run with `REACT_APP_BACKEND_URL=<url> pytest backend/tests/test_iteration8_reimbursements.py` — fully idempotent and self-cleans.",
+  "rca of the issue": "Original bug: partners_portal computed reimbursed_total as sum(reimbursement.amount); a user could create both a manual (no-link) reimbursement AND a linked one for the same expense, causing the loan amount to be subtracted twice and outstanding to go negative / appear duplicated. Fix verified: (a) reimbursed_total is now sum(personal_expense.amount where expense.id in any reimbursement.source_transaction_ids) — manual reimbursements with empty source_transaction_ids no longer reduce outstanding; (b) double-link prevented at API with 409 + 'ya fue reembolsado' detail; (c) cross-partner and missing-tx linking also 409; (d) cash_reimbursed_total kept as sum(reimbursement.amount) for the cash-out widget; (e) deleting a still-pending personal expense returns 409. Frontend mirror: manual-confirm-checkbox forces explicit confirmation when there are pending unselected loans, and delete button is disabled (cursor-not-allowed/slate-300) on pending rows. Reproduction would have required creating manual + linked rb for same tx; with new validation this is now impossible."
+}
