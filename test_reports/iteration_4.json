@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration 4 testing: Partner Portal banner (math + UI) ✅, all 6 export endpoints (xlsx+pdf, auth, invalid format, filters) ✅, all frontend export buttons (Projects/Transactions/Audit/Clients/Providers) ✅. CRITICAL BUG: GET /api/projects ignores q and client_id query params — endpoint signature only accepts `status`. This makes the new Projects search bar and client Combobox filters non-functional end-to-end (UI sends params, backend silently ignores). 12/14 backend tests pass.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/projects",
+        "issue": "Only filters by `status`; query params `q` (name search) and `client_id` are silently ignored. Endpoint signature in server.py ~line 340: `async def list_projects(status: Optional[str] = None, _: dict = Depends(get_current_user))` — needs to accept q and client_id and apply $regex (escaped, case-insensitive) and equality match respectively.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Projects search by name",
+        "issue": "Typing 'ZZZ_NOMATCH_XYZ' in 'Buscar por nombre' leaves all 4 rows visible — backend returns full list because q is ignored.",
+        "affected_selectors": ["input[placeholder='Buscar por nombre']", "tbody tr"]
+      },
+      {
+        "flow": "Projects filter by Cliente",
+        "issue": "Client Combobox filter cannot reduce results because backend ignores client_id param (per backend test_projects_filter_by_client_id failure).",
+        "affected_selectors": ["[data-testid='projects-client-filter']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration4.py",
+    "/app/test_reports/pytest/pytest_iteration4.xml"
+  ],
+  "action_items": [
+    "FIX: server.py list_projects — add `q: Optional[str] = None, client_id: Optional[str] = None` params. Build mongo query: if q: q_str = re.escape(q); query['name'] = {'$regex': q_str, '$options': 'i'}; if client_id: query['client_id'] = client_id. (Export endpoint already does this correctly — copy that logic.)",
+    "After fix, re-run /app/backend/tests/test_iteration4.py::TestProjectsFilters to confirm all 3 tests pass and verify in UI that typing in search box reduces rows."
+  ],
+  "critical_code_review_comments": [
+    "Inconsistency: /api/exports/projects correctly applies q + client_id + status filters (uses re.escape — good), but the main /api/projects list endpoint does NOT. Export filters and list filters must stay in sync to avoid confusing UX (exported data ≠ what user sees).",
+    "Frontend ExportButton uses axios blob download — good (Authorization header preserved). Filename includes ISO date stamp — good.",
+    "PartnerPortal banner correctly computes available_to_distribute server-side; frontend just displays — no duplicate math logic. Good separation.",
+    "ExportButton testids are inconsistent across pages: Transactions uses `tx-export` prefix while others use `{module}-export` (projects-export, audit-export, clients-export, providers-export). Recommend standardizing to `tx-export` → `transactions-export` for predictable QA selectors."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration4.py"
+  ],
+  "success_rate": {
+    "backend": "86% (12/14)",
+    "frontend": "Partner Portal 100%, Export buttons 100% present, Projects filters broken due to backend"
+  },
+  "test_credentials": "carlos@socios.com / socio123 (seeded socio with transactions/projects/clients/providers)",
+  "seed_data_creation": "Tests create TEST_iter4_* projects and clients; all cleaned up in teardown.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent adds q/client_id to list_projects: re-run `pytest /app/backend/tests/test_iteration4.py::TestProjectsFilters -v` (expect 3/3 pass) and the Playwright snippet that fills 'Buscar por nombre' with non-matching text and asserts tbody tr count = 0. PartnerPortal route is /partners (NOT /portal). Transactions export testid prefix is `tx-export`. Banner labels are CSS-uppercased so use case-insensitive matches when grepping page text.",
+  "rca of the issue": "Root cause: list_projects in /app/backend/server.py only declared `status` as a query parameter. FastAPI silently drops unknown query strings. The frontend Projects.jsx (line ~131) correctly sends params {q, client_id, status}, and ExportButton sends the same to /exports/projects (which IS handled correctly in exports endpoint). Fix is a 4-line change in list_projects to mirror the export endpoint's filter logic, ensuring exported data matches the visible list."
+}

@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 6 end-to-end validation (backend + frontend) for Dashboard swap, Settings catalogs module, sidebar collapse/mobile drawer, and delete-lock for paid_personally expenses. 5/5 backend tests PASS. 14/14 frontend checks PASS. All test data was cleaned up.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      { "screen": "Settings / Dashboard filters / Audit / Reimbursement", "issues": ["Carry-over from iter 5: date inputs are native HTML <input type='date'> (browser-default picker) instead of the shadcn calendar used elsewhere. Cosmetic only."] }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_settings_iter6.py",
+    "/app/test_reports/pytest/pytest_iteration6.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Backend /api/settings/catalogs (list, GET by key, PUT by key) work as designed. PUT accepts {items: [{value,label}]} and persists; GET reflects the updated list. Invalid keys return 400 (verified).",
+    "Backend delete_tx lock: an expense with paid_personally=true and no reimbursement covering its tx_id returns 409 with Spanish message 'No se puede eliminar... aún no se ha reembolsado. Registra primero el reembolso en el Portal de Socios.' After creating a /api/reimbursements with source_transaction_ids including the tx, delete succeeds (200/204). Verified end-to-end with cleanup.",
+    "Reimbursement linkage uses source_transaction_ids — without including tx_id in source_transaction_ids the expense remains locked even if the amount is covered. This is the intended design but worth documenting in API docs for any future integrators.",
+    "Dashboard cards now: metric-total-income, metric-total-expenses, metric-net-balance. No metric-cash and no 'Saldo en cuenta' text anywhere on the dashboard (verified).",
+    "Sidebar (Layout.jsx): data-testid='sidebar' has data-collapsed='0'/'1' attribute; sidebar-collapse-toggle button toggles it and persists 'sidebar-collapsed' in localStorage (verified value cycles 0->1->0). Mobile sidebar-mobile-toggle slides sidebar in via translate-x, and clicking the overlay (z-40) outside the sidebar (z-50) translates sidebar to -256px (off-screen). Both behaviors verified.",
+    "Settings page (/configuracion, data-testid='settings-page') renders all 3 catalog editors: catalog-income_categories, catalog-expense_categories, catalog-payment_methods. Each has -save / -reset / -add / -new-label / -new-value / -row-<value> / -remove-<value> testids. The Save button correctly becomes disabled (dirty=false) after a successful PUT.",
+    "Add a new income category 'Marketing-Test' -> auto-slugified to 'marketing_test' -> save -> immediately appears in Transactions '+ Nuevo' Ingreso tx-category dropdown ('Marketing-Test | marketing_test' option visible). Cleanup verified by removing the row and re-saving. Integration with Transactions form is working.",
+    "Mobile hamburger (sidebar-mobile-toggle) is visible at width=600px (lg:hidden), clicking opens sidebar (slides to translate-x-0), clicking the overlay area outside the sidebar closes it (sidebar bounding box returns to x=-256). Verified.",
+    "Spurious test-script result settings_3_catalogs=FAIL during the combined run was a Playwright is_visible() timing race during catalog list load — the catalog-income_categories element is actually present in DOM and fully functional (we successfully added/saved/removed a row on that same editor right after). Treat as test-script artifact, NOT a bug.",
+    "MINOR: PUT /api/settings/catalogs/{key} accepts duplicate labels but the UI enforces uniqueness only on 'value'. That's OK but consider also de-duplicating values server-side to harden the contract."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_settings_iter6.py (new)"
+  ],
+  "success_rate": { "backend": "100% (5/5)", "frontend": "100% (14/14 functional checks)" },
+  "test_credentials": "ana.narvaez@socios.com / Test#Ana-2026 (login -> /dashboard, must_change_password=false)",
+  "seed_data_creation": "Temporary tx + reimbursement (both cleaned), temporary 'Marketing-Test' income category (cleaned via Settings UI and via PUT-back of original items list). NO production data was left modified.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter 6 selectors verified: metric-net-balance (Saldo Neto), sidebar-collapse-toggle (desktop, persists localStorage 'sidebar-collapsed'), sidebar-mobile-toggle (lg:hidden), sidebar has data-collapsed attr '0'/'1'. Settings page testids: settings-page, catalog-<key> where key in {income_categories,expense_categories,payment_methods}; per-catalog: -save, -reset, -add, -new-label, -new-value, -row-<value>, -remove-<value>. Backend endpoints: GET /api/settings/catalogs, GET /api/settings/catalogs/{key}, PUT /api/settings/catalogs/{key} with body {items:[{value,label}]}. Reimbursement must include source_transaction_ids:[tx_id] to unlock a paid_personally tx for deletion. Expense category enum is 'general|taxes|accountant|travel|materials|labor|services|other' (NOT 'otros').",
+  "rca of the issue": "N/A — all iteration-6 acceptance criteria are met."
+}

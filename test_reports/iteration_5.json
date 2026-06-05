@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 5 — Frontend-only validation of the 17 review items (Dashboard restructure, Projects code/tooltip/files, Transactions Comprobante optional + project code in dropdowns, Partner Portal reimbursement-always-enabled + Comprobante uploader + Export, Audit Log date filters). 16/17 items PASS. Only deferred: actually CREATING and DELETING a test transaction/reimbursement (skipped on purpose — production data is live and the UI confirms the fix is present: no asterisk, label says 'opcional', submit button enabled, file input optional). Cleanup risk + the user note 'treat production data with care' drove that decision.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      { "screen": "Dashboard filters / Audit filters / Reimbursement modal", "issues": ["Date inputs are native HTML <input type='date'> (browser-default mm/dd/yyyy picker) instead of the shadcn calendar component used elsewhere — inconsistent UX. Functional but not on-brand."] }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "OPTIONAL: Replace browser-native date inputs in Dashboard.jsx (data-testid='dashboard-filter-from/to'), AuditLog.jsx (data-testid='audit-filter-from/to') and PartnerPortal reimbursement form with the shadcn calendar/popover component used elsewhere in the app — for consistent UX. Low priority, purely cosmetic.",
+    "OPTIONAL: Main agent or user should manually create a real reimbursement (just amount + date, no source tx) using Ana's account to confirm the user-reported bug 'no me esta dejando hacer reembolsos' is resolved end-to-end. UI side is fully wired (submit btn enabled, all fields optional except amount/date)."
+  ],
+  "critical_code_review_comments": [
+    "Dashboard.jsx: 3 metric cards only — 'Saldo Neto' card fully removed (verified). partner-payouts section renders 3 partner cards with reimbursement_total + dividend_total via data-testid='payout-reimbursement-<id>' and 'payout-dividend-<id>'. Dashboard filters (from/to/project) re-fetch /api/dashboard with params — confirmed by setting 1990-01-01..02 and seeing Ingresos drop from $88,620.94 to $0.00.",
+    "Projects.jsx: code badge (data-testid='project-code-<id>') shows code >=1000 (saw 1007, 1006, 1005…). Project name has title attr populated when description exists (verified: 'VENTA DE CCTV E INSTALACION DE TORNIQUETES' on first row; empty title when no description — correct). Status filter buttons render all 5 + Todos (filter-all, filter-in_progress, filter-started, filter-paid, filter-with_debt, filter-completed). Modal status <select> has all 5 options. 'Archivos del proyecto' uploader section present in create/edit modal.",
+    "Transactions.jsx: Edit (testid 'edit-tx-<id>') opens modal without crash; 12 edit buttons present. Comprobante label = 'Comprobante (opcional)' (no asterisk). file input is data-testid='file-input' and not required. Project filter dropdown options display as '1007 · PRUEBA DE PROYECTO' — code prefix correctly applied.",
+    "PartnerPortal.jsx: 3 reimburse buttons (data-testid='reimburse-<id>'), all .is_disabled() === False (verified across all 3 partners, including Ana who has $0 préstamos — Reembolso button is still enabled — bug fix confirmed). Reimbursement modal: 'Comprobante (opcional)' label + file uploader; reimbursement-submit not disabled. Header 'partners-export' opens menu with Excel + PDF; Excel click triggers GET /api/exports/partners returning 200.",
+    "AuditLog.jsx: data-testid='audit-filter-from' and 'audit-filter-to' present; setting 1990-01-01..02 narrows table to 'No hay registros con estos filtros.' — server-side filtering works end-to-end.",
+    "Testid naming inconsistency carried over from previous iterations: edit button on transactions is 'edit-tx-<id>' (not 'tx-edit-<id>'); the review_request docs used 'tx-edit'. Not blocking, but worth aligning future testids on a single pattern: '{module}-{action}-{id}'."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "skipped (per review request)", "frontend": "100% on the 16 items tested; 1 item (live create+delete test tx/reimbursement) deliberately skipped" },
+  "test_credentials": "ana.narvaez@socios.com / Test#Ana-2026 (login goes straight to /dashboard, must_change_password=false)",
+  "seed_data_creation": "None. No test data was created — production records are live; UI presence + non-disabled state of submit buttons + form labels were sufficient to verify each fix.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Selector cheat-sheet (verified): Dashboard cards = metric-total-income / metric-total-expenses / metric-cash. Filters = dashboard-filter-from/to/project, dashboard-filters-clear. Partner payouts = partner-payouts container + payout-partner-<id> + payout-reimbursement-<id> + payout-dividend-<id>. Projects: project-code-<id>, project-name-<id> (title attr for tooltip), project-files-count-<id>, status filters filter-{all,in_progress,started,paid,with_debt,completed}, new-project-btn. Transactions: edit-tx-<id> (NOT tx-edit), tx-amount/date/description/method/category/partner/personally, file-input. PartnerPortal: reimburse-<id>, withdraw-<id>, reimbursement-submit, reimbursement-amount, dividend-submit, partners-export. Audit: audit-filter-from/to/entity/action/actor. PartnerPortal route = /partners. Audit route = /audit. NOTE: many labels use CSS 'uppercase' so when using innerText comparisons use case-insensitive checks.",
+  "rca of the issue": "N/A — all features verified working. The previously reported user bug 'no me esta dejando hacer reembolsos' has a clear UI-side fix: (1) reimburse button is no longer disabled when personal_payments_owed===0, and (2) the reimbursement form accepts amount+date alone (no source-transaction array required, Comprobante optional). End-to-end persistence requires a manual confirmation by the user since the test agent intentionally did not POST a live reimbursement against production data."
+}

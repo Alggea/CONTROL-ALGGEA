@@ -1,0 +1,101 @@
+@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@800,500,700,400,900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #FAFAFA;
+  color: #09090B;
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 240 10% 4%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 4%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 4%;
+    --primary: 226 100% 33%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 240 10% 4%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 36%;
+    --accent: 240 5% 96%;
+    --accent-foreground: 240 10% 4%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 240 10% 4%;
+    --chart-1: 226 100% 33%;
+    --chart-2: 160 84% 39%;
+    --chart-3: 0 84% 60%;
+    --chart-4: 38 92% 50%;
+    --chart-5: 280 65% 60%;
+    --radius: 0rem;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+  h1, h2, h3, h4, h5 {
+    font-family: 'Cabinet Grotesk', system-ui, sans-serif;
+    letter-spacing: -0.02em;
+  }
+}
+
+/* Hard-flatten shadcn surfaces */
+@layer components {
+  .shadow-sm, .shadow, .shadow-md, .shadow-lg, .shadow-xl {
+    box-shadow: none !important;
+  }
+}
+
+.metric-num {
+  font-family: 'Cabinet Grotesk', sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono-num {
+  font-family: 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+::selection { background: #002FA7; color: white; }
+
+/* Send the Emergent watermark to the background so it never overlays the UI */
+#emergent-badge,
+[id*="emergent-badge"],
+[class*="emergent-badge"],
+[data-emergent-badge],
+a[href*="app.emergent.sh"],
+a[href*="emergent.sh"],
+a[href*="emergent.ai"],
+a[href*="emergent-watermark"] {
+  z-index: 0 !important;
+  opacity: 0.55 !important;
+  pointer-events: auto;
+}
+#emergent-badge:hover,
+a[href*="emergent.sh"]:hover {
+  opacity: 1 !important;
+}
+
+@layer base {
+  [data-debug-wrapper="true"] { display: contents !important; }
+  [data-debug-wrapper="true"] > * {
+    margin: inherit; padding: inherit; gap: inherit;
+    border-width: inherit; border-style: inherit; border-color: inherit;
+  }
+}

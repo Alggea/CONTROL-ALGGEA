@@ -1,0 +1,52 @@
+# Control - Administrative Control System
+
+## Original Problem Statement
+Professional administrative control web app for a small company with 3 partners. Based on Excel structure with: Dashboard (financial summary), Project Management (with P&L), Income/Expense tracking (by partner & payment type), Partner Portal (33.33% profit distribution).
+
+## Tech Stack
+- Backend: FastAPI + MongoDB (Motor) + JWT (PyJWT) + bcrypt
+- Frontend: React 19 + Tailwind CSS + Shadcn UI + Phosphor Icons + Recharts + Sonner
+- Currency: MXN, Locale: es-MX
+- Design: Swiss & High-Contrast (Light theme, rounded-none, Cabinet Grotesk + IBM Plex Sans)
+
+## User Personas
+- 3 business partners (Carlos, Ana, Diego) — equal 33.33% profit share
+- All have full read/write access (no role hierarchy)
+
+## Core Requirements (P0 — Phase 1 / Done)
+- [x] JWT authentication for 3 seeded partner accounts
+- [x] Dashboard with Income / Expenses / Net Balance / Cash & Transfer balances
+- [x] Project CRUD with status (in_progress / completed) and date range
+- [x] Per-project P&L calculation
+- [x] Transactions (income/expense) with payment_method, category, project link, partner link, "paid personally" flag
+- [x] Transaction filtering by type / partner / project / payment_method
+- [x] Partner Portal: 33.33% auto distribution, dividends withdrawn, available to collect
+- [x] Monthly trend chart (last 6 months)
+
+## Implementation Log
+- 2026-02-28: Initial MVP — auth, dashboard, projects, transactions, partner portal, dividends
+- 2026-02-28 (later): Reembolsos — reimbursement model + payment_method on dividends, dashboard subtracts both from cash/transfer balances
+- 2026-05-29: Comprobantes + Auditoría — file upload via Emergent object storage (JPG/PNG/WEBP/PDF, 10MB max), reimbursement status badges (Pendiente/Reembolsado) with green-tinted rows, full audit log (create/update/delete) with dedicated /audit page + inline "por [Socio] · hace Xh" badges
+- 2026-06-01: Catálogos + Edición — Clientes & Proveedores catalogs (CRUD, search, RFC/contacto/email/teléfono/notas, delete-in-use blocked with 409), smart-search Combobox component with inline create, edit functionality for Projects/Transactions/Clients/Providers, mandatory comprobante + cliente/proveedor + proyecto on transactions
+- 2026-06-01 (later): Banner socios + Filtros + Exportación — Portal de Socios banner ahora muestra "Utilidad disponible (después de retiros)" con desglose bruto/retiros/reembolsos; filtros en Proyectos (búsqueda por nombre + cliente + estado); Exportación a Excel (.xlsx) y PDF en los 5 módulos respetando filtros aplicados
+- 2026-06-02: Cuentas reales + Seguridad — DB completamente vaciada · 3 cuentas reales (Ana Narvaez, Gabriel Barron, Luis Noguez) con `must_change_password=true` · endpoint `/api/auth/change-password` con validación (mín 8 chars, distinta a la actual) · página `/cambiar-contrasena` con medidor de fortaleza · forzado primer cambio · enlace "Cambiar contraseña" en sidebar · login limpio (sin texto demo, sin cuentas de prueba) · Emergent badge enviado al fondo (z-index:0, opacity:0.55)
+- 2026-06-03: Iteración 5 — Comprobantes opcionales (ingresos/egresos/reembolsos) · IDs auto-incrementales de proyecto desde 1000 visibles en tabla y dropdowns · Tooltip de descripción en proyectos · Estatus extendidos (En progreso / Iniciado / Pagado / Con adeudo / Finalizado) · Carga de archivos por proyecto · Dashboard rediseñado: removida tarjeta "Saldo Neto", filtros por fecha y proyecto, sección "Reembolsos y retiros por socio" · Exportación Excel/PDF del Portal de Socios · Filtros desde/hasta en Auditoría · Fix bug: botón Reembolso ahora siempre habilitado (permite reembolso sin deuda pendiente)
+- 2026-06-03 (iter 6): Iteración 6 — Dashboard: restaurada tarjeta "Saldo Neto" (eliminada "Saldo en cuenta") · Backend lock: no se puede eliminar un egreso con `paid_personally=true` hasta que esté incluido en `source_transaction_ids` de un reembolso (409 con mensaje en español) · Sidebar colapsable: toggle de hamburguesa, modo icon-only en desktop con persistencia en `localStorage`, drawer móvil con overlay · NUEVO módulo Configuración (`/configuracion`): catálogos editables `income_categories`, `expense_categories`, `payment_methods` con CRUD por fila, auto-slugify para valores y reflejo inmediato en formularios de Transacciones
+- 2026-06-03 (iter 7): Iteración 7 — MultiFileUploader: ahora los archivos del proyecto se pueden adjuntar en lote desde el inicio (Ctrl/Shift) con thumbnails de imagen y placeholders PDF · FileGalleryModal: la insignia de archivos en la lista de proyectos ahora abre un visualizador con previews · Configuración: nuevo catálogo `project_statuses` editable con paleta de 8 colores; los estatus y sus colores se aplican al instante en la lista, filtros y exportaciones de Proyectos
+
+
+
+
+## Phase 2 Backlog (P1)
+- [ ] Invoicing module (CFDI-compatible)
+- [ ] Project detail view with full transaction list + KPIs timeline
+- [ ] Email notifications on large expenses
+- [ ] PATCH endpoints / exclude_unset on PUTs (currently full-replace)
+- [ ] Password reset flow (email link)
+
+## P2 Backlog
+- [ ] Recurring expenses (auto-generate monthly)
+- [ ] Budget vs actual per project
+- [ ] Tax (IVA/ISR) calculations
+- [ ] Multi-currency support
+- [ ] Audit log / transaction history

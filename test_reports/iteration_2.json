@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 2 testing for file uploads, audit logs and reimbursement status. Backend: 14/14 pytest tests passed (test_iteration2.py) covering POST/GET/DELETE /api/files with mime+size validation and Bearer/query-param auth, audit logs for transactions/projects/dividends/reimbursements (create/update/delete), reimbursement_status transitions pending->reimbursed via source_transaction_ids and null for income/non-personal, file_id round-trip on transactions, audit endpoint sorting+filters+auth. Frontend: Auditoría nav link visible & routes to /audit. AuditLog page renders 21 audit rows with ACCIÓN badges (CREÓ/EDITÓ/ELIMINÓ), partner avatars, timestamps and 'hace Xs' relative time; filter by action=create correctly reduced to 11 rows. Transactions page renders 'Estado' and 'Archivo' columns, 'Nuevo movimiento' modal contains FileUploader (data-testid='file-uploader', 'file-pick') with COMPROBANTE label, and rows display inline 'por [Partner]' AuditBadge. End-to-end UI submission of personal expense + reimbursement creation could not be visually verified due to a description textarea selector mismatch in the test (the modal validation 'Please fill out this field' fired), but backend e2e equivalent passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/files/{id}/download", "issue": "Token passed as ?auth= query param appears in server access logs (security trade-off vs <a href>). Consider short-lived signed URLs in future."},
+      {"endpoint": "/api/files/upload", "issue": "MAX_FILE_SIZE check happens AFTER reading the entire body into memory (await file.read()). A 100MB upload still consumes RAM before being rejected. Use streaming or Content-Length pre-check."},
+      {"endpoint": "/api/transactions PUT", "issue": "PUT replaces all fields and re-stamps created_* only via stamp_update; if the PUT payload omits an optional field it overwrites with default (e.g. file_id becomes null if not sent). Use PATCH or include $set with payload.model_dump(exclude_unset=True)."},
+      {"endpoint": "/api/reimbursements", "issue": "No PUT endpoint exposed (only POST/GET/DELETE) - intentional? source_transaction_ids cannot be edited after creation; user must delete + recreate."},
+      {"endpoint": "/api/files/{id} DELETE", "issue": "Soft-delete only flips is_deleted in DB; the underlying object in Emergent storage is never removed. Acceptable for audit/restore but should be documented."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Tx 'Nuevo movimiento' modal", "issue": "Modal overlay (fixed inset-0 z-50) intercepts pointer events on the sidebar; after opening it from /transactions, navigation links can't be clicked until modal is closed. Esc/Cancelar works, so it's not user-blocking but Playwright force=False clicks fail. Consider listening for nav clicks to auto-close, or just confirm Cancelar is reachable.", "affected_selectors": ["[data-testid='nav-partners']", "[data-testid='nav-audit']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration2.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_iteration2.xml"
+  ],
+  "action_items": [
+    "(Minor) Stream-validate upload size or check Content-Length before reading body to avoid loading >10MB into memory.",
+    "(Minor) Add PATCH or use exclude_unset on transaction PUT so partial updates don't blank out file_id / paid_personally / project_id.",
+    "(Minor) Decide whether reimbursements need a PUT endpoint to edit linked source_transaction_ids.",
+    "(Polish) Auto-close the Tx modal when sidebar nav is clicked to prevent overlay click-jacking.",
+    "(Polish) Document soft-delete behavior of /api/files/{id} (object remains in storage)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 742 lines mixing models, routes, storage, auth, seed and audit helpers. Strongly recommend splitting into /backend/routers (files, transactions, audit, ...), /backend/models, /backend/storage.py and /backend/auth.py before next iteration.",
+    "init_storage() is sync and called inside async request handlers via put_object/get_object using `requests` (blocking). Under load this will block the FastAPI event loop. Switch to httpx.AsyncClient or run via asyncio.to_thread.",
+    "_decorate_txs loads ALL reimbursements (to_list(2000)) on every /api/transactions list call - O(N*M). For larger datasets, build the linked-id set once via aggregation or store reimbursement_status denormalized on the tx and update it transactionally.",
+    "stamp_update mutates the payload dict in place AND only adds updated_* keys; created_by_id/created_by_name are preserved only because the $set update doesn't include them, but if model_dump ever emitted them they'd be overwritten. Consider exclude={'created_*'} on update payloads.",
+    "log_audit is awaited but is fire-and-forget logically; if Mongo write fails the API request still succeeds silently (no try/except, but the await will raise). Consider wrapping log_audit calls in try/except so a logging failure doesn't 500 the user-facing operation.",
+    "Pydantic models lack PositiveFloat / max-length / future-date guards on amount, description, date. Easy hardening."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration2.py (created)"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "5/6 surfaces verified; e2e badge transition verified at backend layer"},
+  "test_credentials": "carlos@socios.com / socio123 (also ana@, diego@). Seeded automatically.",
+  "seed_data_creation": "test_iteration2.py self-cleans most data. Backend leaves: 1 long-lived file used by test_get_metadata + test_downloads (not deleted), and 1 reimbursement audit log + 1 file audit log. Audit rows accumulate by design (no cleanup of audit_logs).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All audit log entries have entity_type in {transaction, project, dividend, reimbursement, file} and action in {create, update, delete}. Reimbursement status is computed at /api/transactions list time - never stored. File download supports both Authorization: Bearer header AND ?auth= query param; the frontend FileLink component uses the query param. Tx modal overlay blocks sidebar clicks - in Playwright, close the modal (Cancelar / Esc) before navigating away. data-testids of interest: nav-audit, audit-page, audit-filter-entity/action/actor, audit-row-<id>, audit-list, file-uploader, file-pick, file-input, file-clear, file-link-<id>, new-tx-btn.",
+  "rca_of_the_issue": "n/a - no functional bugs found. All requested iteration-2 features (file upload+validation, audit log endpoint+UI, reimbursement_status decoration, audit stamps on tx, /audit page, FileUploader, AuditBadge, nav item) are implemented and behave per spec."
+}

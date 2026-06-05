@@ -1,0 +1,100 @@
+{
+  "theme": "light",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "typography": {
+    "heading_font": "Cabinet Grotesk, sans-serif",
+    "body_font": "IBM Plex Sans, sans-serif",
+    "font_imports": "@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@800,500,700,400,900&display=swap'); @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');",
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl tracking-tighter font-black text-slate-950",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-bold text-slate-900",
+      "h3": "text-xl sm:text-2xl font-semibold text-slate-900",
+      "h4": "text-lg sm:text-xl font-medium text-slate-900",
+      "body": "text-base text-slate-800 leading-relaxed font-['IBM_Plex_Sans']",
+      "small": "text-sm text-slate-600 font-['IBM_Plex_Sans']",
+      "overline": "text-xs uppercase tracking-[0.2em] font-semibold text-slate-500"
+    }
+  },
+  "colors": {
+    "background": "#FAFAFA",
+    "surface": "#FFFFFF",
+    "surface_hover": "#F4F4F5",
+    "border": "#E4E4E7",
+    "text_primary": "#09090B",
+    "text_secondary": "#52525B",
+    "primary": "#002FA7",
+    "primary_foreground": "#FFFFFF",
+    "primary_hover": "#002480",
+    "success": "#10B981",
+    "success_light": "#D1FAE5",
+    "danger": "#EF4444",
+    "danger_light": "#FEE2E2",
+    "warning": "#F59E0B"
+  },
+  "layout_and_spacing": {
+    "container_padding": "p-6 sm:p-8 lg:p-12",
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+    "widget_spans": {
+      "summary": "col-span-1",
+      "main_chart": "col-span-1 md:col-span-2 lg:col-span-3 row-span-2",
+      "list_feed": "col-span-1 row-span-2"
+    },
+    "border_radius": "rounded-none",
+    "surface_strategy": "Grid Borders (Technical Look). Expose the skeleton. Remove soft shadows. Apply 1px sharp borders. Utilize 'border-collapse' style structures for metrics."
+  },
+  "components": {
+    "buttons": "Flat, sharp edges (rounded-none). Primary CTA: bg-[#002FA7] text-white hover:bg-[#002480]. Secondary/Outline: border-2 border-slate-900 text-slate-900 hover:bg-slate-100.",
+    "cards": "Strictly flat. bg-white border border-slate-200 rounded-none shadow-none. Content padding MUST be generous (p-6 or p-8).",
+    "navigation": "Solid white sticky top-nav with a 1px solid border-b border-slate-200. Left: Sharp text logo. Right: Navigation links (no hamburger on desktop) + User Avatar.",
+    "tables": "Dense, crisp data tables. Left-aligned for text, right-aligned for all MXN currency metrics. Subtly tinted row headers (bg-slate-50).",
+    "charts": "Shadcn Charts (Recharts). Use purely functional colors: Emerald for Income, Red for Expenses. Line charts for Net Balance trends.",
+    "forms": "Use Shadcn Select, Calendar (for dates), and Inputs. No native inputs. Square borders (rounded-none)."
+  },
+  "motion_and_interactions": {
+    "hover": "Transition background and border colors (duration-200 ease-in-out). Text color explicitly defined on hover.",
+    "focus": "High-contrast focus rings: focus:ring-2 focus:ring-slate-950 focus:ring-offset-2 focus:outline-none.",
+    "active": "Crisp scale down (scale-[0.98]) to simulate physical key press."
+  },
+  "icons": {
+    "library": "@phosphor-icons/react",
+    "style": "Use regular or bold weights for high legibility.",
+    "install_command": "yarn add @phosphor-icons/react"
+  },
+  "testing": {
+    "requirements": "ALL interactive and key informational elements MUST include a data-testid attribute (e.g., data-testid='metric-total-income', data-testid='nav-dashboard')."
+  },
+  "media": {
+    "auth_backgrounds": [
+      {
+        "url": "https://images.unsplash.com/photo-1488972685288-c3fd157d7c7a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBhYnN0cmFjdCUyMGFyY2hpdGVjdHVyZXxlbnwwfHx8fDE3Nzk5OTk4NTN8MA&ixlib=rb-4.1.0&q=85",
+        "category": "auth_page",
+        "description": "Abstract gray architecture, use as the left-side structural imagery on the split-screen login."
+      }
+    ],
+    "partner_avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTkwNzc3Nnww&ixlib=rb-4.1.0&q=85",
+        "category": "avatar_partner_1",
+        "description": "Partner 1 (Demo Account Avatar)"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTkwNzc3Nnww&ixlib=rb-4.1.0&q=85",
+        "category": "avatar_partner_2",
+        "description": "Partner 2 (Demo Account Avatar)"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTkwNzc3Nnww&ixlib=rb-4.1.0&q=85",
+        "category": "avatar_partner_3",
+        "description": "Partner 3 (Demo Account Avatar)"
+      }
+    ],
+    "rules": "NEVER use placeholder services (dummyimage/via.placeholder). Rely strictly on these provided URLs."
+  },
+  "page_specific_instructions": {
+    "dashboard_summary": "First row must display critical metrics: Total Income, Total Expenses, Net Balance, Cash/Transfer. Use massive typography (text-4xl) for values. Currency format: MXN.",
+    "projects_view": "Table format showing Project Name, Status (Completed/In Progress badge), Start/End Date, Income, Expenses, and Net Margin. Allow filtering by Partner.",
+    "income_expenses_log": "Detailed ledger. Must include type (Cash vs Transfer) with a clear visual icon distinction. Indicate which partner owns the debt/made the payment. Use Shadcn DatePicker and Select for inputs.",
+    "partner_portal": "A dedicated high-contrast module calculating 33.33% of the Net Balance, minus any dividends they have already withdrawn. Show 'Available to Collect' in a striking, dominant widget."
+  },
+  "instructions_to_main_agent": "Implement Archetype 4 (Swiss & High-Contrast). Strip all soft shadows (`shadow-sm`, `shadow-md`) from Shadcn components. Override CSS variables for `--radius` to `0rem` in `index.css`. All interactive elements must have semantic `data-testid` tags. Implement font families correctly in Tailwind config and load them via external stylesheets or Next/Vite head. The design must feel hyper-functional, precise, and objective, serving as a financial truth-source for the partners."
+}

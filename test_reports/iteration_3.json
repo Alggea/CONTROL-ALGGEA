@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 3 testing complete. Backend: 8/8 pytest in test_iteration3.py covering Clients & Providers full CRUD + audit, search ?q (case-insensitive name regex), 409 delete-in-use protection (client linked via project, provider linked via transaction), Transactions accept client_id (income) + provider_id (expense), Transactions PUT updates all fields and stamps updated_by_*, Projects PUT updates name/client_id/status/dates and produces 'update' audit log with updated_by_name. Frontend: nav-clients + nav-providers visible; Clientes page (clients-page, clients-table, create/edit/search/delete) works end-to-end; Proveedores page works with category select; Projects page has Combobox for client (project-client-trigger/panel/search) + edit pencils on rows (3 visible); Transactions table renders new 'Cliente / Proveedor' column header; Tx modal required-fields validation fires the 'El comprobante es obligatorio' toast when submitting without file; tx-client / tx-provider / tx-project Combobox triggers render correctly; toggling income<->expense swaps client<->provider combobox and clears selection (placeholder shown after toggle).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/clients/{id}", "issue": "409 message always mentions both 'transacciones y proyectos' even when only one is non-zero. Slightly noisy for users."},
+      {"endpoint": "PUT /api/clients/{id} & /api/providers/{id}", "issue": "Pydantic model_dump() then $set replaces all keys including category/email/phone/notes; sending partial payload will blank optional fields (same pattern as iteration-2 PUT transactions). Consider exclude_unset on update payloads."},
+      {"endpoint": "GET /api/clients?q & /api/providers?q", "issue": "Regex built directly from user input - special regex chars (e.g. '.+', '(') are interpreted. Use re.escape(q) before $regex to be safe."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Transactions modal", "issues": ["Default form type is 'expense' so on first open the provider Combobox is shown - that matches spec but make sure the page subtitle (now reads 'Comprobante, cliente/proveedor y proyecto son obligatorios') stays accurate."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/pytest/pytest_iteration3.xml"
+  ],
+  "action_items": [
+    "(Minor) Escape regex special chars in /clients?q= and /providers?q= search.",
+    "(Minor) Switch PUT /clients, /providers, /transactions, /projects to model_dump(exclude_unset=True) so partial updates don't blank optional fields like notes/email/category/end_date.",
+    "(Polish) Make the 409 in-use delete message conditional - 'vinculado a N transacciones' or 'vinculado a N proyectos' rather than always listing both."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 889 lines - clients/providers add another ~100 lines on top of an already monolithic file. Strongly recommend splitting into routers/{clients,providers,transactions,projects,audit,files}.py before adding more catalogs.",
+    "ClientIn/ProviderIn share a ContactIn base but provider category default 'general' is silently lost if frontend omits the field (since PUT overwrites with model defaults).",
+    "delete_client / delete_provider issue two count_documents queries serially - acceptable now but should switch to $facet aggregation if more linked collections are added.",
+    "No PATCH endpoints exposed for any catalog - all updates are full-replace PUTs; the frontend always sends the full payload so safe today but brittle for API consumers.",
+    "_decorate_txs (called on every GET /transactions) still loads all reimbursements into memory (iteration-2 finding still applies, not regressed)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration3.py (created)"
+  ],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% of iteration-3 surfaces verified (nav, Clientes CRUD, Proveedores CRUD with category, Projects client Combobox + edit pencils, Tx modal Combobox triggers + required-field toast + type-toggle clears, Tx table Cliente/Proveedor column)"},
+  "test_credentials": "carlos@socios.com / socio123",
+  "seed_data_creation": "Backend pytest fully self-cleans (creates+deletes TEST_ prefixed clients/providers/projects/transactions). Frontend UI test left ONE TEST_UI_Cli_<n> client behind in DB (not deleted by script). Audit log rows accumulate by design.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration-3 testids: nav-clients, nav-providers, clients-page, providers-page, clients-table, providers-table, clients-search, providers-search, new-client-btn / new-provider-btn, client-form / provider-form, client-name / client-rfc / client-submit (same with provider-*), client-row-<id>, edit-client-<id>, delete-client-<id>. Combobox: <testid>-trigger, -panel, -search, -option-<id>, -create, -clear (e.g. tx-client-trigger, tx-provider-trigger, tx-project-trigger, project-client-trigger). Tx modal validates 3 mandatory: file (comprobante), client_id (income)/provider_id (expense), project_id - missing any triggers toast and prevents POST. Default tx type in modal is expense. Iteration-2 findings (modal overlay blocks sidebar clicks; PUT replaces all fields) still apply.",
+  "rca_of_the_issue": "n/a - no functional bugs found. All requested iteration-3 features (Clients & Providers CRUD + search + delete-in-use 409 + audit, Combobox component, Projects edit + client Combobox, Transactions edit + client/provider/project Combobox + required-field validation, new 'Cliente / Proveedor' column, nav items, audit entity labels) are implemented per spec."
+}
