@@ -8,6 +8,7 @@ import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Projects from "@/pages/Projects";
 import Transactions from "@/pages/Transactions";
+import PartnerHub from "@/pages/PartnerHub";
 import PartnerPortal from "@/pages/PartnerPortal";
 import AuditLog from "@/pages/AuditLog";
 import Clients from "@/pages/Clients";
@@ -45,6 +46,7 @@ function App() {
               <Route path="clients" element={<Clients />} />
               <Route path="providers" element={<Providers />} />
               <Route path="partners" element={<PartnerPortal />} />
+              <Route path="espacio" element={<PartnerHub />} />
               <Route path="audit" element={<AuditLog />} />
               <Route path="configuracion" element={<Settings />} />
             </Route>

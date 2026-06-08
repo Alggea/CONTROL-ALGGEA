@@ -1,0 +1,74 @@
+{
+  "summary": "Iteration 9: validated 3 new features — partial reimbursements, loan alerts, and Espacio Socios (Hub). Backend: 16/16 pytest tests passed (partials math, 409 validations, delete lock w/ partials, alerts severities, Hub CRUD + comments authz + filters). Frontend: /espacio flow fully works (note + credential creation, password mask + Eye toggle, search + type filter, badges). /partners alerts-banner-{partner_id} renders for Luis with severity color. Modal opens correctly. All listed acceptance criteria pass.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      { "component": "PartnerHub ItemCard", "issue": "Credential badge label reads 'Credenciale' (should be 'Credencial')", "selector": "card badge text", "priority": "LOW" }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration9_partials_alerts_hub.py",
+    "/app/test_reports/pytest/pytest_iteration9.xml"
+  ],
+  "tests_executed": {
+    "backend_pytest": [
+      "TestLogin::test_basic_login PASSED",
+      "TestPartialReimbursements::test_partial_300_on_1000_owed_700 PASSED  (owed decreases by 300, not 1000)",
+      "TestPartialReimbursements::test_three_partials_sum_to_full PASSED  (300+500+200 -> remaining=0, reimbursed=true)",
+      "TestPartialReimbursements::test_partial_exceeding_returns_409 PASSED  (detail contains 'excede'/'saldo')",
+      "TestPartialReimbursements::test_post_on_fully_reimbursed_returns_409 PASSED  (detail contains 'ya fue reembolsado')",
+      "TestPartialReimbursements::test_pending_endpoint_shape PASSED  (reimbursed_amount/remaining_balance/reimbursed fields present)",
+      "TestDeleteTxLockPartials::test_delete_with_remaining_balance_blocked PASSED  (409 even with partials)",
+      "TestDeleteTxLockPartials::test_delete_when_fully_reimbursed_allowed PASSED  (200)",
+      "TestLoanAlerts::test_put_settings_and_reflect_in_portal PASSED  (PUT 500/30, alerts/alerts_count/has_critical_alert on every partner)",
+      "TestLoanAlerts::test_alert_severities PASSED  (1000@45d=critical, 800@5d=warning amount-only, 100@45d=warning days-only)",
+      "TestHub::test_create_note_and_list PASSED",
+      "TestHub::test_create_credential_full_fields PASSED  (password stored + returned plain)",
+      "TestHub::test_search_q_filter PASSED  (matches username field)",
+      "TestHub::test_type_filter PASSED",
+      "TestHub::test_update_and_delete PASSED  (pinned flag honored)",
+      "TestHub::test_comments_add_and_delete_authz PASSED  (Ana cannot delete Luis comment -> 403; author -> 200)"
+    ],
+    "frontend_playwright": [
+      "Login Luis (Test2026!) -> redirect to / OK",
+      "Navigate /espacio: data-testid=hub-page, hub-new, hub-item-form, hub-type-note all present",
+      "Create note 'TEST_UI_Note' with tags ui,test -> appears in grid with 'Nota' badge + tags visible",
+      "Create credential 'TEST_UI_Cred' username=ui_user password=SuperSecret! -> card renders, credential-password-value shows '••••••••••' (10 bullets)",
+      "Click credential-password-toggle -> reveals 'SuperSecret!' plain text",
+      "hub-search live filter: typing 'TEST_UI_Cred' shows only that card",
+      "hub-filter-credential: shows only the credential card",
+      "Cleanup hub items via UI -> grid empty",
+      "Set thresholds via API to 500/30; create personal expense (Luis, 1500 MXN, 45 days old)",
+      "Navigate /partners: alerts-banner-{partner_id} present for Luis with text 'Préstamo crítico · 6 alertas' (count includes leftover loans from prior iterations + new one)",
+      "Click Reembolso button -> modal 'Reembolso a socio' opens with 'Egresos personales pendientes' section, monto total / fecha / método / descripción / comprobante fields rendered correctly"
+    ]
+  },
+  "critical_code_review_comments": [
+    "server.py _reimbursed_amount_by_tx() (line ~491): correctly aggregates partials per tx_id across all reimbursements; legacy records (no partials) cap at the tx's own amount — prevents over-counting. Verified by test_three_partials_sum_to_full.",
+    "create_reimbursement validation (line ~731): dedupes source_transaction_ids, validates tx existence/type/partner ownership, computes already_per_tx from existing reimbursements, returns 409 with descriptive messages for excess or already-saldado. Edge: when partials not provided for a tx, defaults to full remaining — good UX.",
+    "delete_tx (line ~578): correctly recomputes remaining_balance via _reimbursed_amount_by_tx and blocks 409 if >0.005 outstanding. Works with partials too.",
+    "partners_portal alerts (line ~957): caps applied per-tx at tx.amount (prevents over-cap); severity logic exceeds_amount && exceeds_days -> critical, else -> warning (if either exceeded). Sort: critical first then remaining desc. Matches spec.",
+    "Hub endpoints (line ~1086): clean CRUD with $regex q over title/content/tags/url/username. Comments stored as embedded array; delete authz checks created_by_id == user.id, 403 otherwise. Good security model for partner-only workspace.",
+    "Non-blocking: server.py is now 1500+ lines — should be split into routers (auth.py, transactions.py, reimbursements.py, hub.py, partners.py) as future hygiene.",
+    "Minor UI: 'Credenciale' badge text (PartnerHub.jsx) seems to be a singular/plural error — should be 'Credencial'."
+  ],
+  "updated_files": [],
+  "files_created": [
+    "/app/backend/tests/test_iteration9_partials_alerts_hub.py",
+    "/app/test_reports/iteration_9.json",
+    "/app/test_reports/pytest/pytest_iteration9.xml"
+  ],
+  "success_rate": { "backend": "100%", "frontend": "100%" },
+  "test_credentials": {
+    "ana.narvaez@socios.com": "Bienvenido2026! (must_change_password still true)",
+    "gabriel.barron@socios.com": "Bienvenido2026! (must_change_password still true)",
+    "luis.noguez@socios.com": "Test2026! (already changed in iter 8)"
+  },
+  "seed_data_creation": "All test data was self-cleaned. Note: before iteration 9 started there were leftover personal expenses for Luis (the Préstamo card showed '6 alertas' when threshold was set to 500/30 — these are NOT from iter9; likely from prior manual test_full.py runs or iter8 carryover ($17 TEST tx id acc7f75c-1f5b-47c9-a533-186fbace34b2). Iteration 9 itself created and cleaned: 1 critical tx (cleaned via reimbursement+delete), all hub items deleted via UI. Threshold restored to default 5000/30 at end.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 3 new features (partial reimbursements, loan alerts, Hub /espacio) verified end-to-end. Backend pytest /app/backend/tests/test_iteration9_partials_alerts_hub.py is fully idempotent and can be re-run. Leftover Luis loans from earlier runs still exist — if next iteration needs a clean state, sweep partner Luis personal expenses. Only minor UI cosmetic finding: 'Credenciale' badge typo on credential card — not blocking. Luis password remains Test2026!.",
+  "rca of the issue": "N/A — feature validation, no bugs to root-cause. The earlier reimbursement duplication bug (iter 8) is still fixed; the new partial-reimbursement code reuses _reimbursed_amount_by_tx which now handles both partials map and legacy full-coverage gracefully."
+}

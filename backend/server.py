@@ -177,7 +177,9 @@ class TransactionOut(TransactionIn):
     updated_at: Optional[str] = None
     updated_by_id: Optional[str] = None
     updated_by_name: Optional[str] = None
-    reimbursement_status: Optional[str] = None  # 'reimbursed' | 'pending' | None
+    reimbursement_status: Optional[str] = None  # 'reimbursed' | 'partial' | 'pending' | None
+    reimbursed_amount: Optional[float] = None
+    remaining_balance: Optional[float] = None
 
 # Dividend (Retiro)
 class DividendIn(BaseModel):
@@ -199,6 +201,10 @@ class ReimbursementIn(BaseModel):
     description: Optional[str] = ""
     date: str
     source_transaction_ids: List[str] = Field(default_factory=list)
+    # Optional partial-reimbursement map: {tx_id: amount_applied_to_that_tx}.
+    # If a tx_id appears in source_transaction_ids but NOT in partials, the
+    # full remaining balance of that tx is consumed.
+    partials: Optional[dict] = None
     file_id: Optional[str] = None
 
 class ReimbursementOut(ReimbursementIn):
@@ -206,6 +212,45 @@ class ReimbursementOut(ReimbursementIn):
     created_at: str
     created_by_id: Optional[str] = None
     created_by_name: Optional[str] = None
+
+# ---- Hub de Socios (shared workspace) ----
+HubType = Literal["note", "credential", "link", "file"]
+
+class HubCommentIn(BaseModel):
+    text: str
+
+class HubCommentOut(BaseModel):
+    id: str
+    text: str
+    created_at: str
+    created_by_id: str
+    created_by_name: str
+
+class HubItemIn(BaseModel):
+    type: HubType
+    title: str
+    content: Optional[str] = ""            # note body / link description / file description / credential notes
+    url: Optional[str] = ""                # link/url field (credenciales + enlaces)
+    username: Optional[str] = ""           # credential only
+    password: Optional[str] = ""           # credential only (stored as plain — solo socios)
+    file_id: Optional[str] = None          # file type
+    tags: List[str] = Field(default_factory=list)
+    pinned: bool = False
+
+class HubItemOut(HubItemIn):
+    id: str
+    created_at: str
+    created_by_id: Optional[str] = None
+    created_by_name: Optional[str] = None
+    updated_at: Optional[str] = None
+    updated_by_id: Optional[str] = None
+    updated_by_name: Optional[str] = None
+    comments: List[HubCommentOut] = Field(default_factory=list)
+
+# ---- Loan alert settings ----
+class LoanAlertSettings(BaseModel):
+    threshold_amount: float = 5000.0
+    threshold_days: int = 30
 
 # Client / Provider catalogs
 class ContactIn(BaseModel):
@@ -443,18 +488,51 @@ async def project_pnl(project_id: str, _: dict = Depends(get_current_user)):
     }
 
 # ---------- Transactions ----------
-async def _decorate_txs(txs: List[dict]) -> List[dict]:
-    """Attach reimbursement_status to personal expenses."""
-    rbs = await db.reimbursements.find({}, {"_id": 0, "source_transaction_ids": 1}).to_list(2000)
-    linked: set = set()
+async def _reimbursed_amount_by_tx() -> dict:
+    """Return {tx_id: amount_reimbursed} aggregating partials across all reimbursements.
+    For legacy reimbursement records (no `partials`), we treat each linked source_transaction_id
+    as fully covered by that reimbursement (using the tx's own amount as the cap).
+    """
+    rbs = await db.reimbursements.find(
+        {}, {"_id": 0, "source_transaction_ids": 1, "partials": 1}
+    ).to_list(5000)
+    legacy_ids: set = set()
+    out: dict = {}
     for r in rbs:
-        for tid in r.get("source_transaction_ids", []) or []:
-            linked.add(tid)
+        p = r.get("partials") or {}
+        for sid in (r.get("source_transaction_ids") or []):
+            if sid in p:
+                out[sid] = out.get(sid, 0.0) + float(p[sid])
+            else:
+                legacy_ids.add(sid)
+    if legacy_ids:
+        legacy_txs = await db.transactions.find(
+            {"id": {"$in": list(legacy_ids)}}, {"_id": 0, "id": 1, "amount": 1}
+        ).to_list(len(legacy_ids))
+        for t in legacy_txs:
+            out[t["id"]] = out.get(t["id"], 0.0) + float(t["amount"])
+    return out
+
+async def _decorate_txs(txs: List[dict]) -> List[dict]:
+    """Attach reimbursement_status to personal expenses based on remaining balance."""
+    reimbursed = await _reimbursed_amount_by_tx()
     for t in txs:
         if t.get("type") == "expense" and t.get("paid_personally"):
-            t["reimbursement_status"] = "reimbursed" if t["id"] in linked else "pending"
+            paid = float(reimbursed.get(t["id"], 0.0))
+            amt = float(t.get("amount") or 0)
+            remaining = round(amt - paid, 2)
+            t["reimbursed_amount"] = round(paid, 2)
+            t["remaining_balance"] = remaining
+            if remaining <= 0.005:
+                t["reimbursement_status"] = "reimbursed"
+            elif paid > 0.005:
+                t["reimbursement_status"] = "partial"
+            else:
+                t["reimbursement_status"] = "pending"
         else:
             t["reimbursement_status"] = None
+            t["reimbursed_amount"] = None
+            t["remaining_balance"] = None
     return txs
 
 @api.post("/transactions", response_model=TransactionOut)
@@ -502,20 +580,19 @@ async def delete_tx(tx_id: str, user: dict = Depends(get_current_user)):
     doc = await db.transactions.find_one({"id": tx_id}, {"_id": 0})
     if not doc:
         return {"ok": True}
-    # Lock: an expense paid personally that has NOT been reimbursed cannot be deleted.
+    # Lock: an expense paid personally that still has a pending balance cannot be deleted.
     if doc.get("type") == "expense" and doc.get("paid_personally"):
-        reimbursed = await db.reimbursements.find_one(
-            {"source_transaction_ids": tx_id},
-            {"_id": 0, "id": 1},
-        )
-        if not reimbursed:
+        reimbursed_map = await _reimbursed_amount_by_tx()
+        paid = float(reimbursed_map.get(tx_id, 0.0))
+        remaining = round(float(doc.get("amount") or 0) - paid, 2)
+        if remaining > 0.005:
             partner = await db.users.find_one({"id": doc.get("partner_id")}, {"_id": 0, "name": 1})
             partner_name = (partner or {}).get("name") or "el socio"
             raise HTTPException(
                 status_code=409,
                 detail=(
                     f"No se puede eliminar: este egreso lo pagó {partner_name} de su bolsa "
-                    f"y aún no se ha reembolsado. Registra primero el reembolso en el Portal de Socios."
+                    f"y aún se le adeudan ${remaining:.2f}. Registra primero el reembolso en el Portal de Socios."
                 ),
             )
     await db.transactions.delete_one({"id": tx_id})
@@ -657,11 +734,12 @@ async def create_reimbursement(payload: ReimbursementIn, user: dict = Depends(ge
 
     # Validate source_transaction_ids if provided:
     # 1) each tx must exist, be a personal expense of this partner
-    # 2) none may be already linked to another reimbursement (prevents double-count)
+    # 2) sum(partials) per tx must not exceed remaining balance of that tx
     src_ids = list(dict.fromkeys(doc.get("source_transaction_ids") or []))  # dedupe, preserve order
+    partials_in = doc.get("partials") or {}
     if src_ids:
         txs = await db.transactions.find(
-            {"id": {"$in": src_ids}}, {"_id": 0, "id": 1, "partner_id": 1, "type": 1, "paid_personally": 1, "description": 1}
+            {"id": {"$in": src_ids}}, {"_id": 0, "id": 1, "partner_id": 1, "type": 1, "paid_personally": 1, "description": 1, "amount": 1}
         ).to_list(len(src_ids))
         tx_by_id = {t["id"]: t for t in txs}
         for tid in src_ids:
@@ -673,21 +751,53 @@ async def create_reimbursement(payload: ReimbursementIn, user: dict = Depends(ge
             if t.get("partner_id") != doc.get("partner_id"):
                 raise HTTPException(409, "Un egreso seleccionado no pertenece a este socio.")
 
-        already = await db.reimbursements.find_one(
+        # Compute already-reimbursed amount per tx (partials sum + full links from legacy entries)
+        existing = await db.reimbursements.find(
             {"source_transaction_ids": {"$in": src_ids}},
-            {"_id": 0, "id": 1, "source_transaction_ids": 1},
-        )
-        if already:
-            dup = next((x for x in already.get("source_transaction_ids", []) if x in src_ids), None)
-            dup_desc = (tx_by_id.get(dup, {}) or {}).get("description", "") if dup else ""
-            raise HTTPException(
-                409,
-                "Ese egreso ya fue reembolsado anteriormente"
-                + (f" ({dup_desc})." if dup_desc else "."),
-            )
-        doc["source_transaction_ids"] = src_ids
+            {"_id": 0, "source_transaction_ids": 1, "partials": 1},
+        ).to_list(2000)
+        already_per_tx: dict = {}
+        for r in existing:
+            p = r.get("partials") or {}
+            for sid in (r.get("source_transaction_ids") or []):
+                if sid not in src_ids:
+                    continue
+                # if partials present for this tx, use that; else treat as full-remaining at the
+                # time it was applied (we approximate as the tx's full amount minus what others
+                # already partialed; for legacy records without partials we assume full coverage).
+                if sid in p:
+                    already_per_tx[sid] = already_per_tx.get(sid, 0.0) + float(p[sid])
+                else:
+                    already_per_tx[sid] = already_per_tx.get(sid, 0.0) + float(tx_by_id[sid]["amount"])
+
+        # Validate partials and build the final partials dict
+        partials_out: dict = {}
+        for tid in src_ids:
+            tx_amount = float(tx_by_id[tid]["amount"])
+            already = float(already_per_tx.get(tid, 0.0))
+            remaining = round(tx_amount - already, 2)
+            if remaining <= 0:
+                raise HTTPException(
+                    409,
+                    f"Ese egreso ya fue reembolsado anteriormente ({tx_by_id[tid].get('description','')}).",
+                )
+            requested = float(partials_in.get(tid, remaining))
+            if requested <= 0:
+                continue
+            if requested > remaining + 0.005:
+                raise HTTPException(
+                    409,
+                    f"El monto ({requested:.2f}) excede el saldo pendiente ({remaining:.2f}) del egreso '{tx_by_id[tid].get('description','')}'.",
+                )
+            partials_out[tid] = round(requested, 2)
+
+        if not partials_out:
+            raise HTTPException(409, "No se aplicó ningún monto a los egresos seleccionados.")
+        doc["source_transaction_ids"] = list(partials_out.keys())
+        doc["partials"] = partials_out
     else:
         doc["source_transaction_ids"] = []
+        doc["partials"] = None
 
     doc["id"] = str(uuid.uuid4())
     stamp_create(doc, user)
@@ -718,15 +828,19 @@ async def pending_personal_expenses(partner_id: str, _: dict = Depends(get_curre
         {"partner_id": partner_id, "type": "expense", "paid_personally": True},
         {"_id": 0},
     ).sort("date", -1).to_list(2000)
-    rbs = await db.reimbursements.find({"partner_id": partner_id}, {"_id": 0}).to_list(2000)
-    reimbursed_ids = set()
-    for r in rbs:
-        for tid in r.get("source_transaction_ids", []) or []:
-            reimbursed_ids.add(tid)
-    return [
-        {**t, "reimbursed": t["id"] in reimbursed_ids}
-        for t in txs
-    ]
+    reimbursed_map = await _reimbursed_amount_by_tx()
+    out = []
+    for t in txs:
+        paid = float(reimbursed_map.get(t["id"], 0.0))
+        amt = float(t.get("amount") or 0)
+        remaining = round(amt - paid, 2)
+        out.append({
+            **t,
+            "reimbursed_amount": round(paid, 2),
+            "remaining_balance": remaining,
+            "reimbursed": remaining <= 0.005,
+        })
+    return out
 
 # ---------- Dashboard ----------
 @api.get("/dashboard/summary")
@@ -857,30 +971,60 @@ async def partners_portal(_: dict = Depends(get_current_user)):
     total_reimbursements = sum(r["amount"] for r in rbs)
     available_to_distribute = net_balance - total_dividends
 
+    # Load alert settings (defaults if not set)
+    alert_doc = await db.settings_loan_alerts.find_one({"key": "default"}, {"_id": 0}) or {}
+    threshold_amount = float(alert_doc.get("threshold_amount", 5000.0))
+    threshold_days = int(alert_doc.get("threshold_days", 30))
+
+    # Build per-tx reimbursed amount (handles partials + legacy)
+    reimbursed_map = await _reimbursed_amount_by_tx()
+    today = datetime.now(timezone.utc).date()
+
     partners_data = []
-    # Pre-compute global set of linked source ids
-    global_linked_ids = set()
-    for r in rbs:
-        for tid in r.get("source_transaction_ids", []) or []:
-            global_linked_ids.add(tid)
     for u in users:
         pid = u["id"]
         personal_txs = [
             t for t in txs
             if t["partner_id"] == pid and t.get("paid_personally") and t["type"] == "expense"
         ]
-        personal_total = sum(t["amount"] for t in personal_txs)
-        # Source-of-truth: a personal expense counts as reimbursed only if it is
-        # actually linked to a reimbursement. Manual reimbursements with no
-        # source_transaction_ids do NOT reduce the outstanding loan balance.
-        linked_personal_amount = sum(
-            t["amount"] for t in personal_txs if t["id"] in global_linked_ids
-        )
-        outstanding = personal_total - linked_personal_amount
-        # Cash actually paid back to this partner (for the cash-out widget)
-        cash_reimbursed = sum(r["amount"] for r in rbs if r["partner_id"] == pid)
-        dividends_withdrawn = sum(d["amount"] for d in divs if d["partner_id"] == pid)
+        personal_total = sum(float(t["amount"]) for t in personal_txs)
+        # Partials-aware reimbursed_total: cap per-tx at its own amount
+        reimbursed_per_partner = 0.0
+        partner_alerts = []
+        for t in personal_txs:
+            paid = float(reimbursed_map.get(t["id"], 0.0))
+            amt = float(t["amount"])
+            applied = min(paid, amt)
+            reimbursed_per_partner += applied
+            remaining = round(amt - applied, 2)
+            if remaining > 0.005:
+                # compute age in days
+                try:
+                    d = datetime.fromisoformat(t["date"]).date() if "T" in t["date"] else datetime.strptime(t["date"], "%Y-%m-%d").date()
+                except Exception:
+                    d = today
+                days_old = max(0, (today - d).days)
+                exceeds_amount = remaining >= threshold_amount
+                exceeds_days = days_old >= threshold_days
+                if exceeds_amount or exceeds_days:
+                    severity = "critical" if (exceeds_amount and exceeds_days) else "warning"
+                    partner_alerts.append({
+                        "tx_id": t["id"],
+                        "description": t.get("description", ""),
+                        "amount": amt,
+                        "remaining": remaining,
+                        "days_old": days_old,
+                        "date": t["date"],
+                        "severity": severity,
+                        "exceeds_amount": exceeds_amount,
+                        "exceeds_days": exceeds_days,
+                    })
+        outstanding = round(personal_total - reimbursed_per_partner, 2)
+        cash_reimbursed = sum(float(r["amount"]) for r in rbs if r["partner_id"] == pid)
+        dividends_withdrawn = sum(float(d["amount"]) for d in divs if d["partner_id"] == pid)
         available = per_partner_share + outstanding - dividends_withdrawn
+        # Sort alerts: critical first, then by remaining desc
+        partner_alerts.sort(key=lambda a: (0 if a["severity"] == "critical" else 1, -a["remaining"]))
         partners_data.append({
             "id": pid,
             "name": u["name"],
@@ -890,11 +1034,14 @@ async def partners_portal(_: dict = Depends(get_current_user)):
             "share_percent": share_pct * 100,
             "profit_share": per_partner_share,
             "personal_payments_total": personal_total,
-            "reimbursed_total": linked_personal_amount,
-            "cash_reimbursed_total": cash_reimbursed,
+            "reimbursed_total": round(reimbursed_per_partner, 2),
+            "cash_reimbursed_total": round(cash_reimbursed, 2),
             "personal_payments_owed": outstanding,
             "dividends_withdrawn": dividends_withdrawn,
             "available_to_collect": available,
+            "alerts": partner_alerts,
+            "alerts_count": len(partner_alerts),
+            "has_critical_alert": any(a["severity"] == "critical" for a in partner_alerts),
         })
 
     return {
@@ -903,8 +1050,121 @@ async def partners_portal(_: dict = Depends(get_current_user)):
         "total_dividends_withdrawn": total_dividends,
         "total_reimbursements_paid": total_reimbursements,
         "available_to_distribute": available_to_distribute,
+        "alert_settings": {
+            "threshold_amount": threshold_amount,
+            "threshold_days": threshold_days,
+        },
         "partners": partners_data,
     }
+
+# ---------- Loan alert settings ----------
+@api.get("/settings/loan-alerts", response_model=LoanAlertSettings)
+async def get_loan_alerts(_: dict = Depends(get_current_user)):
+    doc = await db.settings_loan_alerts.find_one({"key": "default"}, {"_id": 0}) or {}
+    return LoanAlertSettings(
+        threshold_amount=float(doc.get("threshold_amount", 5000.0)),
+        threshold_days=int(doc.get("threshold_days", 30)),
+    )
+
+@api.put("/settings/loan-alerts", response_model=LoanAlertSettings)
+async def set_loan_alerts(payload: LoanAlertSettings, user: dict = Depends(get_current_user)):
+    if payload.threshold_amount < 0 or payload.threshold_days < 0:
+        raise HTTPException(400, "Los umbrales deben ser positivos.")
+    await db.settings_loan_alerts.update_one(
+        {"key": "default"},
+        {"$set": {
+            "key": "default",
+            "threshold_amount": float(payload.threshold_amount),
+            "threshold_days": int(payload.threshold_days),
+        }},
+        upsert=True,
+    )
+    await log_audit("update", "settings", "loan-alerts", user,
+                    f"umbral=${payload.threshold_amount:.2f}/{payload.threshold_days}d")
+    return payload
+
+# ---------- Hub de Socios ----------
+@api.get("/hub", response_model=List[HubItemOut])
+async def list_hub(
+    type: Optional[str] = None,
+    q: Optional[str] = None,
+    _: dict = Depends(get_current_user),
+):
+    query: dict = {}
+    if type:
+        query["type"] = type
+    if q:
+        regex = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [{"title": regex}, {"content": regex}, {"tags": regex}, {"url": regex}, {"username": regex}]
+    docs = await db.hub_items.find(query, {"_id": 0}).to_list(5000)
+    docs.sort(key=lambda d: (0 if d.get("pinned") else 1, -(datetime.fromisoformat(d["created_at"]).timestamp() if d.get("created_at") else 0)))
+    return [HubItemOut(**d) for d in docs]
+
+@api.post("/hub", response_model=HubItemOut)
+async def create_hub(payload: HubItemIn, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["comments"] = []
+    stamp_create(doc, user)
+    await db.hub_items.insert_one(doc.copy())
+    await log_audit("create", "hub", doc["id"], user, doc.get("title", ""))
+    doc.pop("_id", None)
+    return HubItemOut(**doc)
+
+@api.put("/hub/{item_id}", response_model=HubItemOut)
+async def update_hub(item_id: str, payload: HubItemIn, user: dict = Depends(get_current_user)):
+    existing = await db.hub_items.find_one({"id": item_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Item no encontrado")
+    upd = payload.model_dump()
+    stamp_update(upd, user)
+    await db.hub_items.update_one({"id": item_id}, {"$set": upd})
+    await log_audit("update", "hub", item_id, user, upd.get("title", ""))
+    doc = await db.hub_items.find_one({"id": item_id}, {"_id": 0})
+    return HubItemOut(**doc)
+
+@api.delete("/hub/{item_id}")
+async def delete_hub(item_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.hub_items.find_one({"id": item_id}, {"_id": 0})
+    await db.hub_items.delete_one({"id": item_id})
+    if doc:
+        await log_audit("delete", "hub", item_id, user, doc.get("title", ""))
+    return {"ok": True}
+
+@api.post("/hub/{item_id}/comments", response_model=HubItemOut)
+async def add_hub_comment(item_id: str, payload: HubCommentIn, user: dict = Depends(get_current_user)):
+    item = await db.hub_items.find_one({"id": item_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "Item no encontrado")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(400, "El comentario no puede estar vacío")
+    comment = {
+        "id": str(uuid.uuid4()),
+        "text": text[:2000],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by_id": user["id"],
+        "created_by_name": user.get("name", ""),
+    }
+    await db.hub_items.update_one({"id": item_id}, {"$push": {"comments": comment}})
+    await log_audit("create", "hub_comment", item_id, user, text[:80])
+    item = await db.hub_items.find_one({"id": item_id}, {"_id": 0})
+    return HubItemOut(**item)
+
+@api.delete("/hub/{item_id}/comments/{comment_id}", response_model=HubItemOut)
+async def delete_hub_comment(item_id: str, comment_id: str, user: dict = Depends(get_current_user)):
+    item = await db.hub_items.find_one({"id": item_id}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "Item no encontrado")
+    comment = next((c for c in (item.get("comments") or []) if c.get("id") == comment_id), None)
+    if not comment:
+        raise HTTPException(404, "Comentario no encontrado")
+    if comment.get("created_by_id") != user["id"]:
+        raise HTTPException(403, "Solo el autor del comentario puede eliminarlo")
+    await db.hub_items.update_one({"id": item_id}, {"$pull": {"comments": {"id": comment_id}}})
+    await log_audit("delete", "hub_comment", item_id, user, comment.get("text", "")[:80])
+    item = await db.hub_items.find_one({"id": item_id}, {"_id": 0})
+    return HubItemOut(**item)
 
 # ---------- Files ----------
 ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp", "application/pdf"}

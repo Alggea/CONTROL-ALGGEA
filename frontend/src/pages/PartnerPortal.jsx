@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import api, { fmtMXN, fmtDate, fmtErr } from "@/lib/api";
 import {
-  Plus, X, Trash, Wallet, HandCoins, ArrowDown, Receipt, CheckCircle,
+  Plus, X, Trash, Wallet, HandCoins, ArrowDown, Receipt, CheckCircle, Warning,
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { FileUploader } from "@/components/FileUploader";
@@ -114,6 +114,7 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
     description: "Reembolso préstamo personal",
     date: new Date().toISOString().slice(0, 10),
     source_transaction_ids: [],
+    partials: {},
     file_id: null,
   });
   const [pending, setPending] = useState([]);
@@ -131,19 +132,43 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
     })();
   }, [partner.id]);
 
+  const recomputeAmount = (nextIds, nextPartials) => {
+    const sum = nextIds.reduce((s, id) => {
+      const tx = pending.find((t) => t.id === id);
+      const remaining = tx?.remaining_balance ?? tx?.amount ?? 0;
+      const v = nextPartials[id];
+      const applied = v === undefined || v === "" ? remaining : Number(v);
+      return s + (isFinite(applied) ? applied : 0);
+    }, 0);
+    return sum > 0 ? sum.toFixed(2) : "";
+  };
+
   const toggleTx = (tx) => {
     const selected = form.source_transaction_ids.includes(tx.id);
     const nextIds = selected
       ? form.source_transaction_ids.filter((id) => id !== tx.id)
       : [...form.source_transaction_ids, tx.id];
-    // Auto-sum amount from selected transactions
-    const sum = pending
-      .filter((t) => nextIds.includes(t.id))
-      .reduce((s, t) => s + t.amount, 0);
+    const nextPartials = { ...form.partials };
+    if (selected) {
+      delete nextPartials[tx.id];
+    } else {
+      // default: full remaining
+      nextPartials[tx.id] = (tx.remaining_balance ?? tx.amount).toFixed(2);
+    }
     setForm({
       ...form,
       source_transaction_ids: nextIds,
-      amount: sum > 0 ? sum.toFixed(2) : form.amount,
+      partials: nextPartials,
+      amount: recomputeAmount(nextIds, nextPartials),
+    });
+  };
+
+  const setPartial = (tx, value) => {
+    const nextPartials = { ...form.partials, [tx.id]: value };
+    setForm({
+      ...form,
+      partials: nextPartials,
+      amount: recomputeAmount(form.source_transaction_ids, nextPartials),
     });
   };
 
@@ -160,7 +185,20 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
       );
       return;
     }
-    onSubmit({ ...form, amount: parseFloat(form.amount) });
+    // Build numeric partials
+    const numericPartials = {};
+    for (const id of form.source_transaction_ids) {
+      const v = form.partials[id];
+      const tx = pending.find((t) => t.id === id);
+      const remaining = tx?.remaining_balance ?? tx?.amount ?? 0;
+      const applied = v === undefined || v === "" ? remaining : parseFloat(v);
+      if (isFinite(applied) && applied > 0) numericPartials[id] = applied;
+    }
+    onSubmit({
+      ...form,
+      amount: parseFloat(form.amount),
+      partials: Object.keys(numericPartials).length ? numericPartials : null,
+    });
   };
 
   return (
@@ -176,9 +214,9 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
 
       <div>
         <label className="block text-xs uppercase tracking-wider font-semibold text-slate-700 mb-2">
-          Egresos personales pendientes {hasPending ? "(selecciona los que se están saldando)" : ""}
+          Egresos personales pendientes {hasPending ? "(selecciona y/o ajusta los montos parciales)" : ""}
         </label>
-        <div className="border border-slate-200 max-h-44 overflow-y-auto" data-testid="pending-list">
+        <div className="border border-slate-200 max-h-72 overflow-y-auto" data-testid="pending-list">
           {loadingPending ? (
             <div className="p-4 text-xs text-slate-500">Cargando…</div>
           ) : pending.length === 0 ? (
@@ -186,29 +224,61 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
           ) : (
             pending.map((t) => {
               const selected = form.source_transaction_ids.includes(t.id);
+              const remaining = t.remaining_balance ?? t.amount;
+              const alreadyPaid = t.reimbursed_amount || 0;
+              const partialVal = form.partials[t.id];
               return (
-                <button
-                  type="button"
+                <div
                   key={t.id}
                   data-testid={`pending-tx-${t.id}`}
-                  onClick={() => toggleTx(t)}
-                  className={`w-full flex items-center justify-between gap-2 px-4 py-2.5 text-left border-b border-slate-100 last:border-b-0 transition-colors duration-150 ${
-                    selected ? "bg-brand/10" : "hover:bg-slate-50"
+                  className={`px-4 py-2.5 border-b border-slate-100 last:border-b-0 transition-colors duration-150 ${
+                    selected ? "bg-brand/5" : ""
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`h-4 w-4 border ${selected ? "bg-brand border-brand" : "border-slate-300"} flex items-center justify-center`}>
-                      {selected && <CheckCircle size={12} weight="fill" className="text-white" />}
+                  <button
+                    type="button"
+                    onClick={() => toggleTx(t)}
+                    className="w-full flex items-center justify-between gap-2 text-left"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`h-4 w-4 border ${selected ? "bg-brand border-brand" : "border-slate-300"} flex items-center justify-center shrink-0`}>
+                        {selected && <CheckCircle size={12} weight="fill" className="text-white" />}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm text-slate-950 truncate">{t.description}</div>
+                        <div className="text-xs text-slate-500 font-mono">
+                          {fmtDate(t.date)} · total {fmtMXN(t.amount)}
+                          {alreadyPaid > 0 && <> · pagado {fmtMXN(alreadyPaid)}</>}
+                        </div>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <div className="text-sm text-slate-950 truncate">{t.description}</div>
-                      <div className="text-xs text-slate-500 font-mono">{fmtDate(t.date)}</div>
+                    <div className="mono-num text-sm text-amber-700 font-bold whitespace-nowrap">
+                      {fmtMXN(remaining)}
                     </div>
-                  </div>
-                  <div className="mono-num text-sm text-slate-950 font-semibold whitespace-nowrap">
-                    {fmtMXN(t.amount)}
-                  </div>
-                </button>
+                  </button>
+                  {selected && (
+                    <div className="mt-2 ml-7 flex items-center gap-2">
+                      <label className="text-[10px] uppercase tracking-wider font-semibold text-slate-500">Aplicar</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        max={remaining}
+                        value={partialVal ?? remaining.toFixed(2)}
+                        onChange={(e) => setPartial(t, e.target.value)}
+                        data-testid={`partial-input-${t.id}`}
+                        className="w-32 px-2 py-1 bg-white border border-slate-300 focus:border-slate-950 focus:outline-none text-sm mono-num"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setPartial(t, remaining.toFixed(2))}
+                        className="text-[10px] uppercase tracking-wider font-semibold text-brand hover:text-brand-hover"
+                      >
+                        Saldar total
+                      </button>
+                    </div>
+                  )}
+                </div>
               );
             })
           )}
@@ -234,7 +304,7 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs uppercase tracking-wider font-semibold text-slate-700 mb-2">Monto MXN</label>
+          <label className="block text-xs uppercase tracking-wider font-semibold text-slate-700 mb-2">Monto total MXN</label>
           <input
             data-testid="reimbursement-amount" type="number" step="0.01" min="0" required
             value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
@@ -447,7 +517,31 @@ export default function PartnerPortal() {
         {/* Partner cards */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {portal.partners.map((p) => (
-            <div key={p.id} data-testid={`partner-card-${p.id}`} className="bg-white border border-slate-200 flex flex-col">
+            <div
+              key={p.id}
+              data-testid={`partner-card-${p.id}`}
+              className={`bg-white border ${
+                p.has_critical_alert
+                  ? "border-red-400"
+                  : p.alerts_count > 0
+                  ? "border-amber-400"
+                  : "border-slate-200"
+              } flex flex-col`}
+            >
+              {p.alerts_count > 0 && (
+                <div
+                  data-testid={`alerts-banner-${p.id}`}
+                  className={`px-4 py-2 text-xs font-semibold border-b ${
+                    p.has_critical_alert
+                      ? "bg-red-50 text-red-800 border-red-200"
+                      : "bg-amber-50 text-amber-800 border-amber-200"
+                  }`}
+                >
+                  <Warning size={14} weight="fill" className="inline mr-1.5 -mt-0.5" />
+                  {p.has_critical_alert ? "Préstamo crítico" : "Préstamos por revisar"} ·{" "}
+                  <span className="font-mono">{p.alerts_count} alerta{p.alerts_count > 1 ? "s" : ""}</span>
+                </div>
+              )}
               <div className="p-6 border-b border-slate-200">
                 <div className="flex items-center gap-4">
                   {p.avatar_url ? (

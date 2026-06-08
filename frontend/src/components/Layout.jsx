@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
   ChartLineUp, FolderSimple, ArrowsLeftRight, UsersThree, SignOut,
   ClockCounterClockwise, AddressBook, Storefront, Key, List as ListIcon,
-  X as XIcon, GearSix,
+  X as XIcon, GearSix, ChatsCircle,
 } from "@phosphor-icons/react";
 
 const NAV = [
@@ -14,6 +14,7 @@ const NAV = [
   { to: "/clients", label: "Clientes", icon: AddressBook, testid: "nav-clients" },
   { to: "/providers", label: "Proveedores", icon: Storefront, testid: "nav-providers" },
   { to: "/partners", label: "Portal de Socios", icon: UsersThree, testid: "nav-partners" },
+  { to: "/espacio", label: "Espacio Socios", icon: ChatsCircle, testid: "nav-hub" },
   { to: "/audit", label: "Auditoría", icon: ClockCounterClockwise, testid: "nav-audit" },
   { to: "/configuracion", label: "Configuración", icon: GearSix, testid: "nav-settings" },
 ];
