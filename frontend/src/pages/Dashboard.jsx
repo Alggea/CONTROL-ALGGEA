@@ -86,6 +86,7 @@ const MetricCard = ({ label, value, sub, icon: Icon, accent, testid, breakdown }
 
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const [opData, setOpData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);
   const [filters, setFilters] = useState({
@@ -106,12 +107,14 @@ export default function Dashboard() {
     (async () => {
       setLoading(true);
       try {
-        const [summary, pj] = await Promise.all([
+        const [summary, pj, op] = await Promise.all([
           api.get("/dashboard/summary", { params }),
           projects.length ? Promise.resolve({ data: projects }) : api.get("/projects"),
+          api.get("/operations/recurring", { params: { months_back: 12 } }),
         ]);
         setData(summary.data);
         if (!projects.length) setProjects(pj.data);
+        setOpData(op.data);
       } finally {
         setLoading(false);
       }
@@ -316,6 +319,46 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+
+        {/* Gastos Fijos / Operación widget */}
+        {opData && (opData.recurring_count > 0 || opData.irregular_count > 0) && (
+          <Link
+            to="/operacion"
+            data-testid="operations-widget"
+            className={`block border ${
+              opData.overdue_count > 0 ? "border-red-300 bg-red-50/60" :
+              opData.upcoming_count > 0 ? "border-amber-300 bg-amber-50/60" :
+              "border-slate-200 bg-white"
+            } px-6 py-5 hover:border-slate-900 transition-colors duration-200`}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto] gap-6 items-center">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.25em] font-semibold text-slate-500">
+                  Gastos fijos · Operación
+                </div>
+                <div className="font-display font-bold text-xl text-slate-950 mt-1">
+                  Estimado mensual: <span className="mono-num">{fmtMXN(opData.total_monthly_estimate)}</span>
+                </div>
+                <div className="text-xs text-slate-600 mt-1">
+                  {opData.recurring_count} flujo{opData.recurring_count === 1 ? "" : "s"} recurrente{opData.recurring_count === 1 ? "" : "s"} detectado{opData.recurring_count === 1 ? "" : "s"}.
+                </div>
+              </div>
+              {opData.overdue_count > 0 && (
+                <div className="text-center px-4">
+                  <div className="metric-num text-2xl text-red-700">{opData.overdue_count}</div>
+                  <div className="text-[9px] uppercase tracking-wider font-semibold text-red-700 mt-1">Atrasados</div>
+                </div>
+              )}
+              {opData.upcoming_count > 0 && (
+                <div className="text-center px-4">
+                  <div className="metric-num text-2xl text-amber-700">{opData.upcoming_count}</div>
+                  <div className="text-[9px] uppercase tracking-wider font-semibold text-amber-700 mt-1">Próximos 7d</div>
+                </div>
+              )}
+              <span className="text-xs font-semibold text-brand whitespace-nowrap">Ver gastos fijos →</span>
+            </div>
+          </Link>
+        )}
 
         {/* Reimbursements + Dividends by partner */}
         <div className="bg-white border border-slate-200" data-testid="partner-payouts">

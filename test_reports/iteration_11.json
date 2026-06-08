@@ -1,0 +1,61 @@
+{
+  "summary": "Iteration 11 — validated 'Gastos Fijos / Operación' (GET /api/operations/recurring + /operacion page + Dashboard widget + Sidebar link). Backend: 13/13 pytest passed (response shape, monthly/bimonthly/irregular detection, 4 status buckets overdue/due/upcoming/on_track, paid_personally + project_id filters, total_monthly_estimate excludes irregulars, sort order, deleted-provider fallback 'Proveedor eliminado'). Frontend: Playwright with 2 seeded providers (one Monthly OVERDUE, one Monthly ON_TRACK) verified — Dashboard 'operations-widget' shows with border-red-300 (overdue_count=1) and href=/operacion; Sidebar 'nav-operations' label 'Gastos Fijos' rendered between nav-transactions and nav-clients (Y-position 180/224/268); /operacion page renders operations-page + 4 StatCards (Estimado mensual=$4,000.00 from 2 recurring × ~$1500+~$2500 × monthly_factor=1; Atrasados=1; Próximos=0; Recurrentes=2); 6 filter buttons present and functional (filter-overdue isolates seed-overdue row, filter-on_track isolates seed-ontrack row, filter-all restores both); recurring-table renders rows with status-{pid}=Atrasado/Al día, frequency-{pid}=Mensual (2 pagos · ~30d), view-history-{pid} href '/transactions?provider=<id>&scope=operational'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11_operations_recurring.py",
+    "/app/test_reports/pytest/pytest_iteration11.xml"
+  ],
+  "tests_executed": {
+    "backend_pytest_13_13": [
+      "TestRecurringDetection::test_response_shape PASSED",
+      "TestRecurringDetection::test_monthly_detection PASSED (label=Mensual, avg_interval∈[25,35], occurrences=4, days_until_next∈[20,30])",
+      "TestRecurringDetection::test_bimonthly_detection PASSED (label=Bimestral, monthly_factor=0.5)",
+      "TestRecurringDetection::test_irregular_detection PASSED (label=Irregular, is_recurring=False, next_expected_date=None)",
+      "TestStatusBuckets::test_status_overdue PASSED (last=40d ago → days_until=-10 → overdue)",
+      "TestStatusBuckets::test_status_due PASSED (last=33d ago → days_until=-3 → due)",
+      "TestStatusBuckets::test_status_upcoming PASSED (last=25d ago → days_until=+5 → upcoming)",
+      "TestStatusBuckets::test_status_on_track PASSED (last=10d ago → days_until=+20 → on_track)",
+      "TestFilters::test_ignores_paid_personally PASSED (provider w/ only paid_personally=true expenses → not in groups)",
+      "TestFilters::test_ignores_project_expenses PASSED (provider w/ project_id set → not in groups)",
+      "TestTotalsAndSort::test_total_monthly_estimate_includes_only_recurring PASSED (monthly ~$1200 delta ∈ [1100,1300]; irregular_count incremented; irregular flow contributes 0)",
+      "TestTotalsAndSort::test_sort_order PASSED (rank monotonic across all returned groups: overdue<due<upcoming<on_track<irregular)",
+      "TestDeletedProvider::test_orphan_provider_id_shows_placeholder PASSED (provider_id not present in providers collection → provider_name='Proveedor eliminado')"
+    ],
+    "frontend_playwright": [
+      "Login Luis (Test2026!) → / OK",
+      "Dashboard: operations-widget present, classes contain 'border-red-300' (overdue_count>0), href=/operacion",
+      "Sidebar nav-operations exists, label='Gastos Fijos', position between nav-transactions (180.5) and nav-clients (268.5) — order OK",
+      "/operacion page: operations-page rendered; 4 stat cards (stat-monthly $4,000.00 · stat-overdue 1 · stat-upcoming 0 · stat-recurring 2) computed from 2 seeded Monthly providers",
+      "6 filter buttons present: filter-all/overdue/due/upcoming/on_track/irregular",
+      "recurring-table: 2 rows rendered for seeded providers; row-OVERDUE → status=Atrasado, frequency=Mensual; row-ONTRACK → status=Al día, frequency=Mensual",
+      "view-history-{pid} hrefs = /transactions?provider=<id>&scope=operational (verified for both)",
+      "filter-overdue → only OVERDUE row visible; filter-on_track → only ONTRACK row visible; filter-all → both rows back"
+    ]
+  },
+  "critical_code_review_comments": [
+    "server.py _classify_frequency (line 1161) — ranges Mensual 25–35, Bimestral 55–65, Trimestral 85–95, Semestral 175–190, Anual 355–375 with monthly_factor 1/0.5/0.333/0.166/0.083. Reasonable defaults, but 'Quincenal' 13–17 leaves gaps 17–25 (mapped to Irregular) and 'Cada 45 días' 40–50 (with factor ~0.666) is an unusual MX bucket — fine but document if business expects 30-day-strict tolerance.",
+    "server.py operations_recurring (line 1183) — cutoff uses today.toordinal() - months_back*30 (approximate 30-day months, not calendar months). Acceptable for a heuristic detector, but mention in docstring (currently only mentions 'últimos 12 meses' in UI).",
+    "server.py operations_recurring — provider_name fallback 'Proveedor eliminado' is correct, BUT the system blocks DELETE /providers when transactions reference it (409). So this fallback only triggers for orphan provider_ids (e.g. from imports or manual db edits). Documented in test 'orphan_provider_id_shows_placeholder'.",
+    "Operations.jsx — RecurringRow's category column shows the most-used category from the group; works but the value comes from the raw 'category' enum string (e.g. 'services'). Consider mapping to user-friendly labels for consistency with Transactions.jsx.",
+    "Dashboard.jsx (line 110) — Promise.all now adds /operations/recurring to the dashboard payload. Endpoint is fast (~5ms for 16 docs) but consider lazy-loading the widget if monthly groups exceed 100 to avoid TTI regressions.",
+    "Operations.jsx is 271 lines, single-file component. OK for now but if filters/columns grow, split RecurringRow into its own module.",
+    "Non-blocking: server.py still 1899 lines — same comment as iter9/10, recommend splitting into routers (auth, transactions, reimbursements, hub, partners, operations) as future hygiene."
+  ],
+  "updated_files": [],
+  "files_created": [
+    "/app/backend/tests/test_iteration11_operations_recurring.py",
+    "/app/test_reports/iteration_11.json",
+    "/app/test_reports/pytest/pytest_iteration11.xml"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": {
+    "luis.noguez@socios.com": "Test2026!",
+    "ana.narvaez@socios.com": "Bienvenido2026! (must_change_password=true)"
+  },
+  "seed_data_creation": "Backend tests self-clean (TEST_iter11_* providers + their tx). Frontend Playwright used helper /tmp/seed_iter11.py to create 2 TEST_iter11ui_* providers (OVERDUE last=50d ago + prev=80d, ONTRACK last=8d ago + prev=38d) with 4 transactions total — cleaned via 'python /tmp/seed_iter11.py cleanup' at end. No real user data touched (CFE, ZWEMMEN EXHIBIMEX, TYUI/WEFGHJ/Precio de la vida transactions intact).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 11 fully validated. Helper script /tmp/seed_iter11.py supports 'seed'/'cleanup' actions and writes state to /tmp/seed_iter11_state.json — handy for quick UI replays. Note: real provider 'CFE' has 3 monthly expenses (~$1,200) from Luis+Gabriel — it appears in the live /operations/recurring response as a recurring group; UI testers can use it directly without seeding if they want a baseline. The 'Cada 45 días' frequency bucket (avg_interval 40-50d) is intentionally distinct from Mensual/Bimestral and uses monthly_factor=0.666; not covered by an explicit unit test but exercised indirectly through the boundary tests.",
+  "rca of the issue": "N/A — feature validation, no bugs found."
+}

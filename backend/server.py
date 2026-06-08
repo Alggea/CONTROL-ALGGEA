@@ -1148,6 +1148,170 @@ async def delete_hub(item_id: str, user: dict = Depends(get_current_user)):
         await log_audit("delete", "hub", item_id, user, doc.get("title", ""))
     return {"ok": True}
 
+# ---------- Operación: gastos fijos recurrentes ----------
+def _parse_iso_date(s: str):
+    """Best-effort ISO date parsing → date object."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s).date() if "T" in s else datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+def _classify_frequency(avg_days: float) -> tuple:
+    """Returns (label, is_recurring, monthly_factor) given avg interval in days."""
+    if avg_days <= 0:
+        return ("Único", False, 0.0)
+    if 6 <= avg_days <= 9:
+        return ("Semanal", True, 30.0 / 7.0)
+    if 13 <= avg_days <= 17:
+        return ("Quincenal", True, 2.0)
+    if 25 <= avg_days <= 35:
+        return ("Mensual", True, 1.0)
+    if 40 <= avg_days <= 50:
+        return ("Cada 45 días", True, 30.0 / 45.0)
+    if 55 <= avg_days <= 65:
+        return ("Bimestral", True, 0.5)
+    if 85 <= avg_days <= 95:
+        return ("Trimestral", True, 1.0 / 3.0)
+    if 175 <= avg_days <= 190:
+        return ("Semestral", True, 1.0 / 6.0)
+    if 355 <= avg_days <= 375:
+        return ("Anual", True, 1.0 / 12.0)
+    return ("Irregular", False, 30.0 / avg_days if avg_days else 0.0)
+
+@api.get("/operations/recurring")
+async def operations_recurring(
+    months_back: int = 12,
+    _: dict = Depends(get_current_user),
+):
+    """Detect recurring operational expenses (without project) grouped by provider.
+
+    Returns:
+      - groups: per-provider detection with avg amount/interval, last/next dates, status
+      - total_monthly_estimate: sum of avg amounts normalized to monthly
+      - upcoming_count: groups whose next expected pago is within 7 days
+      - overdue_count: groups whose next expected pago is overdue >7 days
+    """
+    today = datetime.now(timezone.utc).date()
+    cutoff = today.toordinal() - int(months_back) * 30
+    # Pull operational expenses: type=expense + project_id null + paid_personally false
+    txs = await db.transactions.find(
+        {"type": "expense", "paid_personally": False},
+        {"_id": 0, "id": 1, "amount": 1, "date": 1, "provider_id": 1, "project_id": 1, "description": 1, "category": 1, "payment_method": 1},
+    ).to_list(20000)
+    operational = [
+        t for t in txs
+        if (not t.get("project_id")) and t.get("provider_id")
+    ]
+    # Filter by cutoff
+    operational_in_range = []
+    for t in operational:
+        d = _parse_iso_date(t.get("date", ""))
+        if d and d.toordinal() >= cutoff:
+            operational_in_range.append({**t, "_d": d})
+    # Load providers for names
+    provider_ids = list({t["provider_id"] for t in operational_in_range})
+    provs = await db.providers.find(
+        {"id": {"$in": provider_ids}}, {"_id": 0, "id": 1, "name": 1, "rfc": 1}
+    ).to_list(len(provider_ids) or 1)
+    prov_by_id = {p["id"]: p for p in provs}
+
+    # Group by provider
+    groups_map: dict = {}
+    for t in operational_in_range:
+        groups_map.setdefault(t["provider_id"], []).append(t)
+
+    out_groups = []
+    total_monthly = 0.0
+    upcoming = 0
+    overdue = 0
+    for pid, items in groups_map.items():
+        items.sort(key=lambda x: x["_d"])
+        amounts = [float(x["amount"]) for x in items]
+        dates = [x["_d"] for x in items]
+        n = len(items)
+        last_d = dates[-1]
+        last_amt = amounts[-1]
+        avg_amt = sum(amounts) / n
+        if n >= 2:
+            intervals = [(dates[i] - dates[i - 1]).days for i in range(1, n)]
+            avg_interval = sum(intervals) / len(intervals)
+        else:
+            intervals = []
+            avg_interval = 0
+        label, is_recurring, monthly_factor = _classify_frequency(avg_interval)
+
+        # Predict next expected date
+        if is_recurring:
+            next_expected = last_d.fromordinal(last_d.toordinal() + round(avg_interval))
+        else:
+            next_expected = None
+        days_until = (next_expected - today).days if next_expected else None
+
+        # Status
+        if not is_recurring:
+            status = "irregular"
+        elif days_until is None:
+            status = "unknown"
+        elif days_until < -7:
+            status = "overdue"
+            overdue += 1
+        elif -7 <= days_until <= 0:
+            status = "due"
+            upcoming += 1
+        elif 0 < days_until <= 7:
+            status = "upcoming"
+            upcoming += 1
+        else:
+            status = "on_track"
+
+        # Monthly estimate contribution (use avg amount × monthly_factor)
+        if is_recurring:
+            total_monthly += avg_amt * monthly_factor
+
+        prov = prov_by_id.get(pid, {})
+        # Pick most-used category in this group
+        cats = [x.get("category") or "general" for x in items]
+        cat_counts = {}
+        for c in cats:
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+        top_category = max(cat_counts, key=cat_counts.get) if cat_counts else "general"
+
+        out_groups.append({
+            "provider_id": pid,
+            "provider_name": prov.get("name") or "Proveedor eliminado",
+            "provider_rfc": prov.get("rfc"),
+            "category": top_category,
+            "occurrences": n,
+            "avg_amount": round(avg_amt, 2),
+            "last_amount": round(last_amt, 2),
+            "last_date": last_d.isoformat(),
+            "avg_interval_days": round(avg_interval, 1),
+            "frequency_label": label,
+            "is_recurring": is_recurring,
+            "next_expected_date": next_expected.isoformat() if next_expected else None,
+            "days_until_next": days_until,
+            "status": status,
+            "recent_amounts": [round(a, 2) for a in amounts[-6:]],
+            "monthly_factor": round(monthly_factor, 3),
+        })
+
+    # Sort: overdue first, then due/upcoming, then on_track, then irregular; within each by next date asc
+    rank = {"overdue": 0, "due": 1, "upcoming": 2, "on_track": 3, "irregular": 4, "unknown": 5}
+    out_groups.sort(key=lambda g: (rank.get(g["status"], 9), g.get("days_until_next") if g.get("days_until_next") is not None else 9999))
+
+    return {
+        "groups": out_groups,
+        "total_monthly_estimate": round(total_monthly, 2),
+        "upcoming_count": upcoming,
+        "overdue_count": overdue,
+        "recurring_count": sum(1 for g in out_groups if g["is_recurring"]),
+        "irregular_count": sum(1 for g in out_groups if not g["is_recurring"]),
+        "months_back": months_back,
+        "today": today.isoformat(),
+    }
+
 @api.post("/hub/{item_id}/comments", response_model=HubItemOut)
 async def add_hub_comment(item_id: str, payload: HubCommentIn, user: dict = Depends(get_current_user)):
     item = await db.hub_items.find_one({"id": item_id}, {"_id": 0})
