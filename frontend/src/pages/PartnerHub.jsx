@@ -9,10 +9,10 @@ import { toast } from "sonner";
 import { FileUploader, FileLink } from "@/components/FileUploader";
 
 const TYPES = [
-  { v: "note", l: "Notas", icon: Note, color: "text-slate-700" },
-  { v: "credential", l: "Credenciales", icon: Key, color: "text-amber-700" },
-  { v: "link", l: "Enlaces", icon: LinkIcon, color: "text-blue-700" },
-  { v: "file", l: "Archivos", icon: Paperclip, color: "text-emerald-700" },
+  { v: "note", l: "Notas", singular: "Nota", icon: Note, color: "text-slate-700" },
+  { v: "credential", l: "Credenciales", singular: "Credencial", icon: Key, color: "text-amber-700" },
+  { v: "link", l: "Enlaces", singular: "Enlace", icon: LinkIcon, color: "text-blue-700" },
+  { v: "file", l: "Archivos", singular: "Archivo", icon: Paperclip, color: "text-emerald-700" },
 ];
 
 const EMPTY = (type) => ({
@@ -32,7 +32,7 @@ function TypeBadge({ type }) {
   const Icon = t.icon;
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[9px] uppercase tracking-wider font-bold border border-slate-300 ${t.color}`}>
-      <Icon size={11} weight="bold" /> {t.l.slice(0, -1)}
+      <Icon size={11} weight="bold" /> {t.singular}
     </span>
   );
 }
@@ -430,8 +430,7 @@ export default function PartnerHub() {
   useEffect(() => {
     const id = setTimeout(reload, 200);
     return () => clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterType, search]);
+  }, [filterType, search]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const openNew = () => { setEditing(null); setShowForm(true); };
   const openEdit = (it) => { setEditing(it); setShowForm(true); };
