@@ -208,7 +208,7 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
           Reembolso para {partner.name}
         </div>
         <div className="mt-1 text-sm text-amber-900">
-          Préstamo pendiente: <span className="mono-num font-bold">{fmtMXN(partner.personal_payments_owed)}</span>
+          Monto pendiente por reembolsar: <span className="mono-num font-bold">{fmtMXN(partner.personal_payments_owed)}</span>
         </div>
       </div>
 
@@ -538,7 +538,7 @@ export default function PartnerPortal() {
                   }`}
                 >
                   <Warning size={14} weight="fill" className="inline mr-1.5 -mt-0.5" />
-                  {p.has_critical_alert ? "Préstamo crítico" : "Préstamos por revisar"} ·{" "}
+                  {p.has_critical_alert ? "Reembolso crítico" : "Reembolso pendiente"} ·{" "}
                   <span className="font-mono">{p.alerts_count} alerta{p.alerts_count > 1 ? "s" : ""}</span>
                 </div>
               )}
@@ -564,8 +564,8 @@ export default function PartnerPortal() {
                   <div className="text-xs uppercase tracking-wider text-slate-500">Participación 33.33%</div>
                   <div className="mono-num text-sm text-slate-950 font-semibold">{fmtMXN(p.profit_share)}</div>
                 </div>
-                <div className="flex items-center justify-between" title="Préstamos personales pendientes (total - reembolsados)">
-                  <div className="text-xs uppercase tracking-wider text-slate-500">+ Préstamos pendientes</div>
+                <div className="flex items-center justify-between" title="Monto financiado por el socio (lo que la sociedad le adeuda)">
+                  <div className="text-xs uppercase tracking-wider text-slate-500">+ Monto financiado</div>
                   <div className="mono-num text-sm text-amber-700 font-semibold">{fmtMXN(p.personal_payments_owed)}</div>
                 </div>
                 {p.reimbursed_total > 0 && (

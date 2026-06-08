@@ -552,6 +552,9 @@ async def list_transactions(
     partner_id: Optional[str] = None,
     project_id: Optional[str] = None,
     payment_method: Optional[str] = None,
+    client_id: Optional[str] = None,
+    provider_id: Optional[str] = None,
+    scope: Optional[str] = None,  # 'project' = has project_id; 'operational' = no project_id
     _: dict = Depends(get_current_user),
 ):
     q = {}
@@ -559,6 +562,12 @@ async def list_transactions(
     if partner_id: q["partner_id"] = partner_id
     if project_id: q["project_id"] = project_id
     if payment_method: q["payment_method"] = payment_method
+    if client_id: q["client_id"] = client_id
+    if provider_id: q["provider_id"] = provider_id
+    if scope == "project":
+        q["project_id"] = {"$ne": None, "$exists": True}
+    elif scope == "operational":
+        q["$or"] = [{"project_id": None}, {"project_id": {"$exists": False}}]
     docs = await db.transactions.find(q, {"_id": 0}).sort("date", -1).to_list(5000)
     docs = await _decorate_txs(docs)
     return [TransactionOut(**d) for d in docs]
@@ -1099,6 +1108,14 @@ async def list_hub(
     docs = await db.hub_items.find(query, {"_id": 0}).to_list(5000)
     docs.sort(key=lambda d: (0 if d.get("pinned") else 1, -(datetime.fromisoformat(d["created_at"]).timestamp() if d.get("created_at") else 0)))
     return [HubItemOut(**d) for d in docs]
+
+@api.get("/hub/counts")
+async def hub_counts(_: dict = Depends(get_current_user)):
+    """Returns counts per type (independent of any active filter)."""
+    out = {"all": await db.hub_items.count_documents({})}
+    for t in ("note", "credential", "link", "file"):
+        out[t] = await db.hub_items.count_documents({"type": t})
+    return out
 
 @api.post("/hub", response_model=HubItemOut)
 async def create_hub(payload: HubItemIn, user: dict = Depends(get_current_user)):

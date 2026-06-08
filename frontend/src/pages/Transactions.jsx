@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import api, { fmtMXN, fmtDate, fmtErr } from "@/lib/api";
 import {
   Plus, X, Trash, PencilSimple, ArrowUpRight, ArrowDownRight,
-  Money, ArrowsLeftRight, CheckCircle, Warning,
+  Money, ArrowsLeftRight, CheckCircle, Warning, ArrowsClockwise,
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { FileUploader, FileLink } from "@/components/FileUploader";
@@ -34,6 +34,7 @@ function TxForm({
     provider_id: null,
     category: "general",
     project_id: null,
+    is_operational: false,
     partner_id: currentUserId || partners[0]?.id || "",
     paid_personally: false,
     date: new Date().toISOString().slice(0, 10),
@@ -65,8 +66,14 @@ function TxForm({
       toast.error("Selecciona un proveedor");
       return;
     }
-    if (!form.project_id) {
+    // Project is required for income (siempre asociado a un cliente y proyecto)
+    // y para egresos NO operativos.
+    if (isIncome && !form.project_id) {
       toast.error("Selecciona un proyecto");
+      return;
+    }
+    if (!isIncome && !form.is_operational && !form.project_id) {
+      toast.error("Selecciona un proyecto o marca el egreso como 'Operación'");
       return;
     }
     onSubmit({
@@ -75,6 +82,10 @@ function TxForm({
       // mutually exclusive
       client_id: isIncome ? form.client_id : null,
       provider_id: isIncome ? null : form.provider_id,
+      // Operational expense: clear project_id; income: always uses project
+      project_id: !isIncome && form.is_operational ? null : form.project_id,
+      // Force a stable category for income (catalogue is irrelevant)
+      category: isIncome ? "general" : form.category,
     });
   };
 
@@ -157,7 +168,9 @@ function TxForm({
       </div>
 
       <div>
-        <label className="block text-xs uppercase tracking-wider font-semibold text-slate-700 mb-2">Proyecto *</label>
+        <label className="block text-xs uppercase tracking-wider font-semibold text-slate-700 mb-2">
+          {isIncome ? "Proyecto *" : (form.is_operational ? "Proyecto (no aplica para egresos de operación)" : "Proyecto *")}
+        </label>
         <Combobox
           testid="tx-project"
           value={form.project_id}
@@ -167,12 +180,32 @@ function TxForm({
             name: p.code ? `${p.code} · ${p.name}` : p.name,
             sub: p.status === "completed" ? "Completado" : "En progreso",
           }))}
-          placeholder="Selecciona un proyecto…"
-          required
+          placeholder={form.is_operational ? "Sin proyecto (egreso operativo)" : "Selecciona un proyecto…"}
+          required={isIncome || !form.is_operational}
+          disabled={!isIncome && form.is_operational}
         />
+        {!isIncome && (
+          <label className="mt-2 flex items-start gap-2 px-3 py-2 border border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100" data-testid="tx-operational-label">
+            <input
+              type="checkbox"
+              checked={!!form.is_operational}
+              onChange={(e) => setForm({
+                ...form,
+                is_operational: e.target.checked,
+                project_id: e.target.checked ? null : form.project_id,
+              })}
+              data-testid="tx-operational-checkbox"
+              className="mt-0.5"
+            />
+            <div>
+              <div className="text-sm font-semibold text-slate-950">Egreso de operación (sin proyecto)</div>
+              <div className="text-xs text-slate-600">Renta, luz, agua, internet, impuestos, contador, nómina, etc.</div>
+            </div>
+          </label>
+        )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className={`grid ${isIncome ? "grid-cols-1" : "grid-cols-2"} gap-4`}>
         <div>
           <label className="block text-xs uppercase tracking-wider font-semibold text-slate-700 mb-2">Método de pago</label>
           <select
@@ -183,15 +216,19 @@ function TxForm({
             <option value="transfer">Transferencia</option>
           </select>
         </div>
-        <div>
-          <label className="block text-xs uppercase tracking-wider font-semibold text-slate-700 mb-2">Categoría</label>
-          <select
-            data-testid="tx-category" value={form.category} onChange={set("category")}
-            className="w-full px-4 py-2.5 bg-white border border-slate-300 focus:border-slate-950 focus:outline-none text-sm"
-          >
-            {activeCategories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-          </select>
-        </div>
+        {!isIncome && (
+          <div>
+            <label className="block text-xs uppercase tracking-wider font-semibold text-slate-700 mb-2">
+              {form.is_operational ? "Tipo de egreso operativo" : "Categoría"}
+            </label>
+            <select
+              data-testid="tx-category" value={form.category} onChange={set("category")}
+              className="w-full px-4 py-2.5 bg-white border border-slate-300 focus:border-slate-950 focus:outline-none text-sm"
+            >
+              {activeCategories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+          </div>
+        )}
       </div>
 
       <div>
@@ -263,6 +300,9 @@ export default function Transactions() {
     partner_id: searchParams.get("partner") || "",
     project_id: searchParams.get("project") || "",
     payment_method: searchParams.get("method") || "",
+    client_id: searchParams.get("client") || "",
+    provider_id: searchParams.get("provider") || "",
+    scope: searchParams.get("scope") || "",
   };
 
   const setFilter = (k, v) => {
@@ -279,6 +319,9 @@ export default function Transactions() {
       if (filters.partner_id) params.partner_id = filters.partner_id;
       if (filters.project_id) params.project_id = filters.project_id;
       if (filters.payment_method) params.payment_method = filters.payment_method;
+      if (filters.client_id) params.client_id = filters.client_id;
+      if (filters.provider_id) params.provider_id = filters.provider_id;
+      if (filters.scope) params.scope = filters.scope;
       const [tx, pr, pj, cl, pv, ic, ec] = await Promise.all([
         api.get("/transactions", { params }),
         api.get("/partners"),
@@ -352,6 +395,7 @@ export default function Transactions() {
       project_id: t.project_id || null,
       client_id: t.client_id || null,
       provider_id: t.provider_id || null,
+      is_operational: t.type === "expense" && !t.project_id,
       amount: String(t.amount),
     });
     setShowForm(true);
@@ -371,7 +415,7 @@ export default function Transactions() {
           <h1 className="font-display font-black text-4xl sm:text-5xl tracking-tighter text-slate-950">
             Ingresos y Egresos
           </h1>
-          <p className="text-slate-600 mt-2 text-sm">Bitácora completa. Cliente/proveedor y proyecto son obligatorios. El comprobante es opcional.</p>
+          <p className="text-slate-600 mt-2 text-sm">Bitácora completa. Para ingresos: cliente + proyecto. Para egresos: proveedor + proyecto (o marca «Operación» para gastos sin proyecto: renta, luz, impuestos…).</p>
         </div>
         <div className="flex items-center gap-3">
           <ExportButton
@@ -381,6 +425,9 @@ export default function Transactions() {
               partner_id: filters.partner_id || undefined,
               project_id: filters.project_id || undefined,
               payment_method: filters.payment_method || undefined,
+              client_id: filters.client_id || undefined,
+              provider_id: filters.provider_id || undefined,
+              scope: filters.scope || undefined,
             }}
             filename="ingresos_egresos"
             testid="tx-export"
@@ -397,7 +444,7 @@ export default function Transactions() {
 
       <div className="p-8 lg:p-12 space-y-6">
         {/* Filters */}
-        <div className="bg-white border border-slate-200 p-5 grid grid-cols-1 md:grid-cols-4 gap-4" data-testid="tx-filters">
+        <div className="bg-white border border-slate-200 p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" data-testid="tx-filters">
           <div>
             <div className="text-[10px] uppercase tracking-wider font-semibold text-slate-500 mb-2">Tipo</div>
             <select data-testid="filter-type" value={filters.type} onChange={(e) => setFilter("type", e.target.value)}
@@ -436,6 +483,42 @@ export default function Transactions() {
               <option value="transfer">Transferencia</option>
             </select>
           </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-slate-500 mb-2">Cliente</div>
+            <select data-testid="filter-client" value={filters.client_id} onChange={(e) => setFilter("client", e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 bg-white text-sm focus:border-slate-950 focus:outline-none">
+              <option value="">Todos</option>
+              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-slate-500 mb-2">Proveedor</div>
+            <select data-testid="filter-provider" value={filters.provider_id} onChange={(e) => setFilter("provider", e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 bg-white text-sm focus:border-slate-950 focus:outline-none">
+              <option value="">Todos</option>
+              {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-slate-500 mb-2">Ámbito</div>
+            <select data-testid="filter-scope" value={filters.scope} onChange={(e) => setFilter("scope", e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 bg-white text-sm focus:border-slate-950 focus:outline-none">
+              <option value="">Todos</option>
+              <option value="project">Con proyecto</option>
+              <option value="operational">Operación (sin proyecto)</option>
+            </select>
+          </div>
+          {(filters.type || filters.partner_id || filters.project_id || filters.payment_method || filters.client_id || filters.provider_id || filters.scope) && (
+            <div className="flex items-end">
+              <button
+                onClick={() => setSearchParams(new URLSearchParams())}
+                data-testid="clear-filters"
+                className="w-full px-3 py-2 border border-slate-300 text-slate-700 text-xs uppercase tracking-wider font-semibold hover:bg-slate-50"
+              >
+                Limpiar filtros
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Summary */}
@@ -489,10 +572,11 @@ export default function Transactions() {
                     : providerById[t.provider_id];
                   const contactName = contact?.name || t.counterparty || "—";
                   const isReimbursed = t.reimbursement_status === "reimbursed";
+                  const isPartial = t.reimbursement_status === "partial";
                   const isPending = t.reimbursement_status === "pending";
                   return (
                     <tr key={t.id}
-                      className={`border-b border-slate-100 hover:bg-slate-50 ${isReimbursed ? "bg-emerald-50/40" : ""}`}
+                      className={`border-b border-slate-100 hover:bg-slate-50 ${isReimbursed ? "bg-emerald-50/40" : isPartial ? "bg-indigo-50/40" : ""}`}
                       data-testid={`tx-row-${t.id}`}
                     >
                       <td className="px-4 py-3">
@@ -534,6 +618,16 @@ export default function Transactions() {
                             className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] uppercase tracking-wider font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
                             <CheckCircle size={11} weight="fill" /> Reembolsado
                           </span>
+                        ) : isPartial ? (
+                          <div className="flex flex-col gap-1">
+                            <span data-testid={`status-partial-${t.id}`}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] uppercase tracking-wider font-bold bg-indigo-100 text-indigo-800 border border-indigo-300">
+                              <ArrowsClockwise size={11} weight="bold" /> Parcial
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {fmtMXN(t.reimbursed_amount || 0)} / {fmtMXN(t.amount)}
+                            </span>
+                          </div>
                         ) : isPending ? (
                           <span data-testid={`status-pending-${t.id}`}
                             className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] uppercase tracking-wider font-bold bg-amber-100 text-amber-800 border border-amber-300">
@@ -559,16 +653,16 @@ export default function Transactions() {
                           </button>
                           <button
                             onClick={() => remove(t.id)}
-                            disabled={isPending}
+                            disabled={isPending || isPartial}
                             data-testid={`delete-tx-${t.id}`}
                             className={`p-1.5 ${
-                              isPending
+                              (isPending || isPartial)
                                 ? "text-slate-300 cursor-not-allowed"
                                 : "text-slate-400 hover:text-red-600 hover:bg-red-50"
                             }`}
                             title={
-                              isPending
-                                ? "No se puede eliminar: el socio aún tiene este préstamo pendiente. Registra primero el reembolso."
+                              (isPending || isPartial)
+                                ? "No se puede eliminar: el socio aún tiene saldo pendiente. Registra primero el reembolso completo."
                                 : "Eliminar"
                             }
                           >

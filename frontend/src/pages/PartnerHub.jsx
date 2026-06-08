@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import api, { fmtDate, fmtErr, API } from "@/lib/api";
 import {
   Plus, X, Trash, PencilSimple, MagnifyingGlass, PushPin, PushPinSlash,
@@ -393,6 +393,7 @@ function ItemCard({ item, onEdit, onDelete, onTogglePin, onAddComment, onDeleteC
 
 export default function PartnerHub() {
   const [items, setItems] = useState([]);
+  const [counts, setCounts] = useState({ all: 0, note: 0, credential: 0, link: 0, file: 0 });
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -412,6 +413,13 @@ export default function PartnerHub() {
     })();
   }, []);
 
+  const reloadCounts = async () => {
+    try {
+      const { data } = await api.get("/hub/counts");
+      setCounts(data);
+    } catch (e) { /* ignore */ }
+  };
+
   const reload = async () => {
     setLoading(true);
     try {
@@ -420,6 +428,7 @@ export default function PartnerHub() {
       if (search.trim()) params.q = search.trim();
       const { data } = await api.get("/hub", { params });
       setItems(data);
+      reloadCounts();
     } catch (e) {
       toast.error(fmtErr(e));
     } finally {
@@ -481,11 +490,7 @@ export default function PartnerHub() {
     } catch (e) { toast.error(fmtErr(e)); }
   };
 
-  const counts = useMemo(() => {
-    const c = { all: items.length };
-    TYPES.forEach((t) => { c[t.v] = items.filter((i) => i.type === t.v).length; });
-    return c;
-  }, [items]);
+  const totalAll = counts.all || 0;
 
   return (
     <div data-testid="hub-page">
@@ -535,7 +540,7 @@ export default function PartnerHub() {
                 !filterType ? "bg-slate-950 text-white" : "bg-white text-slate-700 hover:bg-slate-50"
               }`}
             >
-              Todos <span className="ml-1 opacity-60">{counts.all}</span>
+              Todos <span className="ml-1 opacity-60">{totalAll}</span>
             </button>
             {TYPES.map((t) => (
               <button

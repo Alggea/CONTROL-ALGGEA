@@ -1,0 +1,63 @@
+{
+  "summary": "Iteration 10 — validated 7 user-requested improvements end-to-end. Backend: 10/10 pytest passed (scope=operational/project filters, client_id/provider_id filters, operational expense create+persist, income with arbitrary category, /api/files/upload PDF+JPG+PNG -> 200 with EMERGENT_LLM_KEY restored, /api/hub/counts shape + independence from list filters). Frontend: data-testid='alggea-total' present on Dashboard with value $55,530.16 (= cash + transfer); /partners renames 'Monto financiado' and 'Reembolso pendiente' (legacy strings 'Préstamos pendientes' / 'Préstamos por revisar' fully removed); /transactions filter bar shows all 7 selects (Tipo, Socio, Proyecto, Método, Cliente, Proveedor, Ámbito) with new testids filter-client/filter-provider/filter-scope; clear-filters button conditionally rendered only when filters active (verified in code); new movement modal hides 'Categoría' when type=Ingreso; checkbox 'Egreso de operación (sin proyecto)' with tx-operational-checkbox + tx-operational-label disables the project select and swaps 'Categoría' for 'Tipo de egreso operativo'; /espacio filter badges keep GLOBAL counts (4/1/2/1/0) after clicking filter-credential — counts no longer rewritten to 0. File-attach modal opens cleanly without 'Almacenamiento no disponible'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration10_filters_scope_hub_counts.py",
+    "/app/test_reports/pytest/pytest_iteration10.xml"
+  ],
+  "tests_executed": {
+    "backend_pytest_10_10": [
+      "TestTransactionsFilters::test_scope_operational_returns_only_no_project PASSED",
+      "TestTransactionsFilters::test_scope_project_returns_only_with_project PASSED",
+      "TestTransactionsFilters::test_filter_client_id PASSED",
+      "TestTransactionsFilters::test_filter_provider_id PASSED",
+      "TestCreateOperationalExpense::test_create_expense_no_project_paid_company PASSED (verified persistence via scope=operational GET)",
+      "TestCreateOperationalExpense::test_create_income_arbitrary_category_does_not_break PASSED",
+      "TestFileUpload::test_upload_pdf PASSED (200, EMERGENT_LLM_KEY restored)",
+      "TestFileUpload::test_upload_jpg PASSED",
+      "TestFileUpload::test_upload_png PASSED",
+      "TestHubCounts::test_counts_shape_and_independence PASSED (shape {all,note,credential,link,file}; counts unchanged after /hub?type=credential query)"
+    ],
+    "frontend_playwright": [
+      "Login Luis (Test2026!) -> /  OK",
+      "Dashboard: data-testid='alggea-total' present; text 'Saldo Alggea $55,530.16' matches cash + transfer columns",
+      "/partners: page contains 'Monto financiado' and 'Reembolso pendiente'; legacy 'Préstamos pendientes' and 'Préstamos por revisar' NOT present",
+      "/transactions filter bar: filter-client / filter-provider / filter-scope present; 7 selects rendered (Tipo, Socio, Proyecto, Método, Cliente, Proveedor, Ámbito); clear-filters absent by design when no filter is active (code line 511)",
+      "New movement modal — default Egreso: shows 'Categoría' + 'Egreso de operación (sin proyecto)'; click 'Ingreso' pill: 'Categoría' is HIDDEN and 'Cliente' field appears, 'Egreso de operación' hidden",
+      "Toggle tx-operational-checkbox: 'Categoría' replaced by 'Tipo de egreso operativo'; project select becomes disabled (label updated to 'PROYECTO (NO APLICA PARA EGRESOS DE OPERACIÓN)') — 1 disabled control inside modal as expected",
+      "/espacio: filter buttons show global counts 'Todos 4 | Notas 1 | Credenciales 2 | Enlaces 1 | Archivos 0' equal to /api/hub/counts; clicking hub-filter-credential KEEPS the same counts (no zeroing of Notas/etc.)",
+      "/espacio Nuevo item type=Archivos modal opens cleanly; 'Adjuntar comprobante (JPG/PNG/PDF · máx 10MB)' visible; NO 'Almacenamiento no disponible' error rendered (matches backend upload 200)"
+    ]
+  },
+  "critical_code_review_comments": [
+    "server.py list_transactions (line 549) — scope='operational' uses $or [{project_id:None},{project_id:{$exists:false}}]; scope='project' uses $ne:None; client_id and provider_id pass-through. Clean. Verified.",
+    "server.py /api/hub/counts (line 1112) — global counts independent of list query; correct design to avoid recomputing on the client.",
+    "Transactions.jsx (line 511) — clear-filters button conditionally rendered only when any filter is set; this matches good UX but tests should be aware (don't expect it on a clean state). Documented.",
+    "Transactions.jsx (line 188) — 'Egreso de operación' checkbox + label have proper testids and disable the project select via the 'PROYECTO (NO APLICA PARA EGRESOS DE OPERACIÓN)' label swap. Persistence with project_id=null confirmed via backend test.",
+    "Dashboard.jsx (line 28) — MethodBreakdown reusable component with showTotal/totalLabel props; alggea-total computed = cash + transfer (validated $55,530.16 = -$2,344.98 + $57,875.14).",
+    "PartnerPortal.jsx (line 541, 568) — 'Reembolso pendiente' / 'Monto financiado' rename consistent; severity-aware 'Reembolso crítico' still preserved when has_critical_alert.",
+    "Non-blocking: server.py is 1734 lines — still recommend splitting into routers (auth/transactions/reimbursements/hub/partners) as future hygiene (same comment as iter9, no regression in this iter)."
+  ],
+  "updated_files": [],
+  "files_created": [
+    "/app/backend/tests/test_iteration10_filters_scope_hub_counts.py",
+    "/app/test_reports/iteration_10.json",
+    "/app/test_reports/pytest/pytest_iteration10.xml"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": {
+    "ana.narvaez@socios.com": "Bienvenido2026! (must_change_password=true)",
+    "gabriel.barron@socios.com": "Bienvenido2026! (must_change_password=true)",
+    "luis.noguez@socios.com": "Test2026! (already changed)"
+  },
+  "seed_data_creation": "Backend test created and self-cleaned: 1 TEST_iter10_operational_expense, 1 TEST_iter10_income_any_category, 1 TEST_iter10_hubcounts_* note. All real user data (TYUI, WEFGHJ, Precio de la vida, ZWEMMEN EXHIBIMEX, CFE, project '1000 · renovacion de torniquetes') preserved untouched. Existing leftover personal expenses from prior iterations still present (out of scope).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 7 user-requested improvements verified. Backend pytest file /app/backend/tests/test_iteration10_filters_scope_hub_counts.py is idempotent and can be re-run. Note that the 'partial' badge on /transactions could not be visually exercised here because none of the current 3 real expenses have a partial reimbursement state (TYUI=pending, WEFGHJ=reimbursed, Precio=reimbursed); the code path is present (status-partial-{id} testid at Transactions.jsx line 623) and was already covered by iter9 backend tests for the partial math + iter10 reads it through the same reimbursement_status='partial' field. To exercise the badge visually, register a partial reimbursement against TYUI from /partners (e.g. $1000 of $5000) and reload /transactions.",
+  "rca of the issue": "N/A — feature validation. No bugs found."
+}

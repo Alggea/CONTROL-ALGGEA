@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import api, { fmtMXN, fmtDate } from "@/lib/api";
 import {
   TrendUp, TrendDown, Money, ArrowsLeftRight,
-  FolderSimple, ArrowUpRight, ArrowDownRight, Receipt, FunnelSimple,
+  FolderSimple, ArrowUpRight, ArrowDownRight, Receipt, FunnelSimple, Bank,
 } from "@phosphor-icons/react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis,
@@ -25,17 +25,18 @@ const PageHeader = ({ eyebrow, title, subtitle, action }) => (
   </div>
 );
 
-const MethodBreakdown = ({ cash = 0, transfer = 0, testid }) => {
+const MethodBreakdown = ({ cash = 0, transfer = 0, testid, showTotal = false, totalLabel = "Saldo Alggea" }) => {
   const total = Math.abs(cash) + Math.abs(transfer);
   const cashPct = total > 0 ? (Math.abs(cash) / total) * 100 : 0;
   const transferPct = total > 0 ? (Math.abs(transfer) / total) * 100 : 0;
+  const sum = cash + transfer;
   return (
     <div className="pt-3 mt-3 border-t border-slate-100" data-testid={testid}>
       <div className="h-1 w-full bg-slate-100 flex overflow-hidden">
         <div className="h-full bg-amber-500" style={{ width: `${cashPct}%` }} />
         <div className="h-full bg-brand" style={{ width: `${transferPct}%` }} />
       </div>
-      <div className="grid grid-cols-2 gap-2 mt-2">
+      <div className={`grid ${showTotal ? "grid-cols-3" : "grid-cols-2"} gap-2 mt-2`}>
         <div className="flex items-center gap-1.5">
           <Money size={11} weight="bold" className="text-amber-600 shrink-0" />
           <div className="min-w-0">
@@ -50,6 +51,15 @@ const MethodBreakdown = ({ cash = 0, transfer = 0, testid }) => {
             <div className="mono-num text-[11px] text-slate-900 font-semibold truncate">{fmtMXN(transfer)}</div>
           </div>
         </div>
+        {showTotal && (
+          <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200" data-testid="alggea-total">
+            <Bank size={11} weight="bold" className="text-slate-900 shrink-0" />
+            <div className="min-w-0">
+              <div className="text-[9px] uppercase tracking-wider text-slate-500">{totalLabel}</div>
+              <div className={`mono-num text-[11px] font-bold truncate ${sum < 0 ? "text-red-700" : "text-slate-900"}`}>{fmtMXN(sum)}</div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -225,6 +235,8 @@ export default function Dashboard() {
                 cash={data.cash_balance}
                 transfer={data.transfer_balance}
                 testid="breakdown-net"
+                showTotal
+                totalLabel="Saldo Alggea"
               />
             }
           />
