@@ -1,13 +1,10 @@
 {
-    "experimentalServices": {
-        "frontend": {
-            "root": "frontend",
-            "routePrefix": "/",
-            "framework": "create-react-app"
-        },
-        "backend": {
-            "root": "backend",
-            "routePrefix": "/_/backend"
-        }
+  "version": 2,
+  "builds": [
+    {
+      "src": "Interfaz/package.json",
+      "use": "@vercel/static-build",
+      "config": { "distDir": "build" }
     }
+  ]
 }
