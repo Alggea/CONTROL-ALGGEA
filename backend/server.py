@@ -805,8 +805,12 @@ async def create_reimbursement(payload: ReimbursementIn, user: dict = Depends(ge
         doc["source_transaction_ids"] = list(partials_out.keys())
         doc["partials"] = partials_out
     else:
-        doc["source_transaction_ids"] = []
-        doc["partials"] = None
+        # Un reembolso SIEMPRE debe estar vinculado a uno o más egresos del socio;
+        # de lo contrario pierde su naturaleza (no salda ningún préstamo).
+        raise HTTPException(
+            409,
+            "Un reembolso debe estar vinculado al menos a un egreso pendiente del socio.",
+        )
 
     doc["id"] = str(uuid.uuid4())
     stamp_create(doc, user)

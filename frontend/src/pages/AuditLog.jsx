@@ -9,9 +9,28 @@ import ExportButton from "@/components/ExportButton";
 const ENTITY_LABELS = {
   transaction: "Transacción",
   project: "Proyecto",
-  dividend: "Retiro",
-  reimbursement: "Reembolso",
+  dividend: "Retiro de socio",
+  reimbursement: "Reembolso a socio",
   file: "Archivo",
+  hub: "Item del espacio",
+  hub_comment: "Comentario",
+  client: "Cliente",
+  provider: "Proveedor",
+  settings: "Ajuste",
+  user: "Usuario / Socio",
+};
+const ENTITY_SOURCE = {
+  transaction: "Ingresos y Egresos",
+  project: "Proyectos",
+  dividend: "Portal de Socios",
+  reimbursement: "Portal de Socios",
+  file: "Archivos",
+  hub: "Espacio Socios",
+  hub_comment: "Espacio Socios",
+  client: "Clientes",
+  provider: "Proveedores",
+  settings: "Configuración",
+  user: "Configuración",
 };
 const ACTION_LABELS = { create: "Creó", update: "Editó", delete: "Eliminó" };
 const ACTION_COLORS = {
@@ -25,6 +44,12 @@ const ENTITY_COLORS = {
   dividend: "#F59E0B",
   reimbursement: "#EF4444",
   file: "#64748b",
+  hub: "#8B5CF6",
+  hub_comment: "#A78BFA",
+  client: "#0EA5E9",
+  provider: "#14B8A6",
+  settings: "#475569",
+  user: "#475569",
 };
 
 const ActionIcon = ({ action, size = 12 }) => {
@@ -203,16 +228,28 @@ export default function AuditLog() {
                         <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">
                           {ENTITY_LABELS[log.entity_type] || log.entity_type}
                         </span>
+                        {ENTITY_SOURCE[log.entity_type] && (
+                          <span
+                            data-testid={`audit-source-${log.id}`}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] uppercase tracking-wider font-semibold bg-slate-100 text-slate-700 border border-slate-200"
+                            title="Módulo donde se originó la acción"
+                          >
+                            <FunnelSimple size={10} weight="bold" />
+                            {ENTITY_SOURCE[log.entity_type]}
+                          </span>
+                        )}
                       </div>
                       <div className="mt-1.5 text-sm text-slate-950">
                         <span className="font-semibold">{log.actor_name}</span>
                         <span className="text-slate-500"> {ACTION_LABELS[log.action].toLowerCase()} </span>
                         <span className="font-semibold">{(ENTITY_LABELS[log.entity_type] || "").toLowerCase()}</span>
-                        {log.label && <span className="text-slate-600"> · "{log.label}"</span>}
+                        {log.label && <span className="text-slate-600"> · «{log.label}»</span>}
                       </div>
                       <div className="mt-1 text-[11px] text-slate-500 font-mono inline-flex items-center gap-3">
                         <span>{new Date(log.timestamp).toLocaleString("es-MX")}</span>
                         <span className="text-slate-400">hace {timeAgo(log.timestamp)}</span>
+                        <span className="text-slate-300">·</span>
+                        <span className="text-slate-500">ID {log.entity_id?.slice(0, 8) || "—"}</span>
                       </div>
                     </div>
                     {partner && (

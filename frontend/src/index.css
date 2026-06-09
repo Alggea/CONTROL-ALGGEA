@@ -47,6 +47,14 @@ body {
 @layer base {
   * { @apply border-border; }
   body { @apply bg-background text-foreground; }
+  /* Eliminar las flechas (spinners) de los inputs type="number" — evita
+     que el monto se modifique sin querer al hacer scroll o tocar el spinner. */
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
   h1, h2, h3, h4, h5 {
     font-family: 'Cabinet Grotesk', system-ui, sans-serif;
     letter-spacing: -0.02em;

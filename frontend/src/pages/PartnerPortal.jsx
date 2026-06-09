@@ -119,7 +119,6 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
   });
   const [pending, setPending] = useState([]);
   const [loadingPending, setLoadingPending] = useState(true);
-  const [confirmManual, setConfirmManual] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -174,14 +173,15 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
 
   const hasPending = pending.length > 0;
   const noneSelected = form.source_transaction_ids.length === 0;
-  const needsManualConfirm = hasPending && noneSelected;
 
   const submit = (e) => {
     e.preventDefault();
     if (submitting) return;
-    if (needsManualConfirm && !confirmManual) {
+    if (noneSelected) {
       toast.error(
-        "Hay egresos pendientes. Selecciónalos para saldarlos o confirma que es un reembolso manual sin vincular."
+        hasPending
+          ? "Selecciona al menos un egreso pendiente para vincular el reembolso."
+          : "Este socio no tiene egresos pendientes por reembolsar."
       );
       return;
     }
@@ -283,22 +283,15 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
             })
           )}
         </div>
-        {needsManualConfirm && (
-          <label
-            className="mt-2 flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 cursor-pointer"
-            data-testid="manual-confirm-label"
-          >
-            <input
-              type="checkbox"
-              checked={confirmManual}
-              onChange={(e) => setConfirmManual(e.target.checked)}
-              className="mt-0.5"
-              data-testid="manual-confirm-checkbox"
-            />
-            <span>
-              Reembolso manual sin vincular a un egreso pendiente. <strong>Esto NO reducirá el préstamo pendiente</strong> de {partner.name}.
-            </span>
-          </label>
+        {hasPending && noneSelected && (
+          <div className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2">
+            Selecciona uno o más egresos pendientes para vincular este reembolso. Un reembolso siempre se asocia a un egreso del socio.
+          </div>
+        )}
+        {!hasPending && (
+          <div className="mt-2 text-xs text-slate-700 bg-slate-50 border border-slate-200 px-3 py-2" data-testid="no-pending-msg">
+            Este socio no tiene egresos pendientes por reembolsar. No es necesario registrar un reembolso.
+          </div>
         )}
       </div>
 
@@ -351,7 +344,7 @@ function ReimbursementForm({ partner, onSubmit, onCancel, submitting }) {
         <button
           type="submit"
           data-testid="reimbursement-submit"
-          disabled={submitting || (needsManualConfirm && !confirmManual)}
+          disabled={submitting || noneSelected}
           className="px-5 py-2.5 bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {submitting ? "Guardando..." : "Registrar reembolso"}
