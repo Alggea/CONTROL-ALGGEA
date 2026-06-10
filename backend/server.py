@@ -11,6 +11,9 @@ import logging
 import bcrypt
 import jwt
 import requests
+import cloudinary
+import cloudinary.uploader
+import cloudinary.utils
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal, Any
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Header, Query
@@ -24,67 +27,37 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# ---------- Storage ----------
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+# ---------- Storage (Cloudinary) ----------
 APP_NAME = os.environ.get("APP_NAME", "admin-control")
-_storage_key: Optional[str] = None
 
-def init_storage() -> Optional[str]:
-    global _storage_key
-    if _storage_key:
-        return _storage_key
-    if not EMERGENT_KEY:
-        return None
-    try:
-        resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-        resp.raise_for_status()
-        _storage_key = resp.json()["storage_key"]
-        return _storage_key
-    except Exception as e:
-        logging.error(f"Storage init failed: {e}")
-        return None
+cloudinary.config(
+    cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.environ.get("CLOUDINARY_API_KEY"),
+    api_secret=os.environ.get("CLOUDINARY_API_SECRET"),
+    secure=True,
+)
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    if not key:
-        raise HTTPException(500, "Almacenamiento no disponible")
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=120,
+    resource_type = "raw" if content_type == "application/pdf" else "image"
+    public_id = path.replace("/", "_").rsplit(".", 1)[0]
+    result = cloudinary.uploader.upload(
+        data,
+        public_id=public_id,
+        resource_type=resource_type,
+        overwrite=True,
     )
-    if resp.status_code == 403:
-        # key expired; re-init once
-        global _storage_key
-        _storage_key = None
-        key = init_storage()
-        resp = requests.put(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key, "Content-Type": content_type},
-            data=data, timeout=120,
-        )
-    resp.raise_for_status()
-    return resp.json()
+    return {"path": result["public_id"], "size": result.get("bytes", len(data)), "url": result["secure_url"]}
 
 def get_object(path: str) -> tuple:
-    key = init_storage()
-    if not key:
-        raise HTTPException(500, "Almacenamiento no disponible")
-    resp = requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key}, timeout=60,
-    )
-    if resp.status_code == 403:
-        global _storage_key
-        _storage_key = None
-        key = init_storage()
-        resp = requests.get(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key}, timeout=60,
-        )
+    resource_type = "raw" if path.endswith(".pdf") or "pdf" in path else "image"
+    url, _ = cloudinary.utils.cloudinary_url(path, resource_type=resource_type, secure=True)
+    resp = requests.get(url, timeout=60)
     resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    content_type = resp.headers.get("Content-Type", "application/octet-stream")
+    return resp.content, content_type
+
+def init_storage():
+    pass  # No initialization needed for Cloudinary
 
 # ---------- JWT ----------
 JWT_ALG = "HS256"
@@ -201,9 +174,6 @@ class ReimbursementIn(BaseModel):
     description: Optional[str] = ""
     date: str
     source_transaction_ids: List[str] = Field(default_factory=list)
-    # Optional partial-reimbursement map: {tx_id: amount_applied_to_that_tx}.
-    # If a tx_id appears in source_transaction_ids but NOT in partials, the
-    # full remaining balance of that tx is consumed.
     partials: Optional[dict] = None
     file_id: Optional[str] = None
 
@@ -229,11 +199,11 @@ class HubCommentOut(BaseModel):
 class HubItemIn(BaseModel):
     type: HubType
     title: str
-    content: Optional[str] = ""            # note body / link description / file description / credential notes
-    url: Optional[str] = ""                # link/url field (credenciales + enlaces)
-    username: Optional[str] = ""           # credential only
-    password: Optional[str] = ""           # credential only (stored as plain — solo socios)
-    file_id: Optional[str] = None          # file type
+    content: Optional[str] = ""
+    url: Optional[str] = ""
+    username: Optional[str] = ""
+    password: Optional[str] = ""
+    file_id: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     pinned: bool = False
 
@@ -265,7 +235,7 @@ class ClientIn(ContactIn):
     pass
 
 class ProviderIn(ContactIn):
-    category: Optional[str] = "general"  # services, materials, taxes, etc.
+    category: Optional[str] = "general"
 
 class ContactOut(BaseModel):
     id: str
@@ -411,10 +381,8 @@ async def _next_project_code() -> str:
         upsert=True,
         return_document=True,
     )
-    # If counter just initialized at 0, set to 1000
     seq = res.get("seq", 1) if res else 1
     if seq < 1000:
-        # initialize to 1000
         await db.counters.update_one({"_id": "project_seq"}, {"$set": {"seq": 1000}})
         seq = 1000
     return str(seq)
@@ -489,10 +457,6 @@ async def project_pnl(project_id: str, _: dict = Depends(get_current_user)):
 
 # ---------- Transactions ----------
 async def _reimbursed_amount_by_tx() -> dict:
-    """Return {tx_id: amount_reimbursed} aggregating partials across all reimbursements.
-    For legacy reimbursement records (no `partials`), we treat each linked source_transaction_id
-    as fully covered by that reimbursement (using the tx's own amount as the cap).
-    """
     rbs = await db.reimbursements.find(
         {}, {"_id": 0, "source_transaction_ids": 1, "partials": 1}
     ).to_list(5000)
@@ -514,7 +478,6 @@ async def _reimbursed_amount_by_tx() -> dict:
     return out
 
 async def _decorate_txs(txs: List[dict]) -> List[dict]:
-    """Attach reimbursement_status to personal expenses based on remaining balance."""
     reimbursed = await _reimbursed_amount_by_tx()
     for t in txs:
         if t.get("type") == "expense" and t.get("paid_personally"):
@@ -554,7 +517,7 @@ async def list_transactions(
     payment_method: Optional[str] = None,
     client_id: Optional[str] = None,
     provider_id: Optional[str] = None,
-    scope: Optional[str] = None,  # 'project' = has project_id; 'operational' = no project_id
+    scope: Optional[str] = None,
     _: dict = Depends(get_current_user),
 ):
     q = {}
@@ -589,7 +552,6 @@ async def delete_tx(tx_id: str, user: dict = Depends(get_current_user)):
     doc = await db.transactions.find_one({"id": tx_id}, {"_id": 0})
     if not doc:
         return {"ok": True}
-    # Lock: an expense paid personally that still has a pending balance cannot be deleted.
     if doc.get("type") == "expense" and doc.get("paid_personally"):
         reimbursed_map = await _reimbursed_amount_by_tx()
         paid = float(reimbursed_map.get(tx_id, 0.0))
@@ -740,11 +702,7 @@ async def delete_provider(provider_id: str, user: dict = Depends(get_current_use
 @api.post("/reimbursements", response_model=ReimbursementOut)
 async def create_reimbursement(payload: ReimbursementIn, user: dict = Depends(get_current_user)):
     doc = payload.model_dump()
-
-    # Validate source_transaction_ids if provided:
-    # 1) each tx must exist, be a personal expense of this partner
-    # 2) sum(partials) per tx must not exceed remaining balance of that tx
-    src_ids = list(dict.fromkeys(doc.get("source_transaction_ids") or []))  # dedupe, preserve order
+    src_ids = list(dict.fromkeys(doc.get("source_transaction_ids") or []))
     partials_in = doc.get("partials") or {}
     if src_ids:
         txs = await db.transactions.find(
@@ -759,8 +717,6 @@ async def create_reimbursement(payload: ReimbursementIn, user: dict = Depends(ge
                 raise HTTPException(409, "Solo egresos pagados personalmente pueden vincularse a un reembolso.")
             if t.get("partner_id") != doc.get("partner_id"):
                 raise HTTPException(409, "Un egreso seleccionado no pertenece a este socio.")
-
-        # Compute already-reimbursed amount per tx (partials sum + full links from legacy entries)
         existing = await db.reimbursements.find(
             {"source_transaction_ids": {"$in": src_ids}},
             {"_id": 0, "source_transaction_ids": 1, "partials": 1},
@@ -771,47 +727,29 @@ async def create_reimbursement(payload: ReimbursementIn, user: dict = Depends(ge
             for sid in (r.get("source_transaction_ids") or []):
                 if sid not in src_ids:
                     continue
-                # if partials present for this tx, use that; else treat as full-remaining at the
-                # time it was applied (we approximate as the tx's full amount minus what others
-                # already partialed; for legacy records without partials we assume full coverage).
                 if sid in p:
                     already_per_tx[sid] = already_per_tx.get(sid, 0.0) + float(p[sid])
                 else:
                     already_per_tx[sid] = already_per_tx.get(sid, 0.0) + float(tx_by_id[sid]["amount"])
-
-        # Validate partials and build the final partials dict
         partials_out: dict = {}
         for tid in src_ids:
             tx_amount = float(tx_by_id[tid]["amount"])
             already = float(already_per_tx.get(tid, 0.0))
             remaining = round(tx_amount - already, 2)
             if remaining <= 0:
-                raise HTTPException(
-                    409,
-                    f"Ese egreso ya fue reembolsado anteriormente ({tx_by_id[tid].get('description','')}).",
-                )
+                raise HTTPException(409, f"Ese egreso ya fue reembolsado anteriormente ({tx_by_id[tid].get('description','')}).")
             requested = float(partials_in.get(tid, remaining))
             if requested <= 0:
                 continue
             if requested > remaining + 0.005:
-                raise HTTPException(
-                    409,
-                    f"El monto ({requested:.2f}) excede el saldo pendiente ({remaining:.2f}) del egreso '{tx_by_id[tid].get('description','')}'.",
-                )
+                raise HTTPException(409, f"El monto ({requested:.2f}) excede el saldo pendiente ({remaining:.2f}) del egreso '{tx_by_id[tid].get('description','')}'.")
             partials_out[tid] = round(requested, 2)
-
         if not partials_out:
             raise HTTPException(409, "No se aplicó ningún monto a los egresos seleccionados.")
         doc["source_transaction_ids"] = list(partials_out.keys())
         doc["partials"] = partials_out
     else:
-        # Un reembolso SIEMPRE debe estar vinculado a uno o más egresos del socio;
-        # de lo contrario pierde su naturaleza (no salda ningún préstamo).
-        raise HTTPException(
-            409,
-            "Un reembolso debe estar vinculado al menos a un egreso pendiente del socio.",
-        )
-
+        raise HTTPException(409, "Un reembolso debe estar vinculado al menos a un egreso pendiente del socio.")
     doc["id"] = str(uuid.uuid4())
     stamp_create(doc, user)
     await db.reimbursements.insert_one(doc.copy())
@@ -836,7 +774,6 @@ async def delete_reimbursement(rb_id: str, user: dict = Depends(get_current_user
 
 @api.get("/partners/{partner_id}/pending-personal-expenses")
 async def pending_personal_expenses(partner_id: str, _: dict = Depends(get_current_user)):
-    """Returns personal expenses by partner with their remaining un-reimbursed amount."""
     txs = await db.transactions.find(
         {"partner_id": partner_id, "type": "expense", "paid_personally": True},
         {"_id": 0},
@@ -883,8 +820,6 @@ async def dashboard_summary(
     total_expenses = sum(t["amount"] for t in txs if t["type"] == "expense")
     net_balance = total_income - total_expenses
 
-    # Cash/Transfer balances: include income, exclude expenses paid personally
-    # (those didn't move company cash), subtract dividends and reimbursements (cash outflows).
     def sum_company(filter_fn):
         return sum(t["amount"] for t in txs if filter_fn(t))
 
@@ -892,29 +827,21 @@ async def dashboard_summary(
     cash_out = sum_company(lambda t: t["type"] == "expense" and t["payment_method"] == "cash" and not t.get("paid_personally"))
     transfer_in = sum_company(lambda t: t["type"] == "income" and t["payment_method"] == "transfer")
     transfer_out = sum_company(lambda t: t["type"] == "expense" and t["payment_method"] == "transfer" and not t.get("paid_personally"))
-
-    # Gross by payment method (used for breakdown bars under each card)
     cash_income_all = cash_in
     cash_expense_all = sum_company(lambda t: t["type"] == "expense" and t["payment_method"] == "cash")
     transfer_income_all = transfer_in
     transfer_expense_all = sum_company(lambda t: t["type"] == "expense" and t["payment_method"] == "transfer")
-
     cash_divs = sum(d["amount"] for d in divs if d.get("payment_method", "transfer") == "cash")
     transfer_divs = sum(d["amount"] for d in divs if d.get("payment_method", "transfer") == "transfer")
     cash_rbs = sum(r["amount"] for r in rbs if r.get("payment_method", "transfer") == "cash")
     transfer_rbs = sum(r["amount"] for r in rbs if r.get("payment_method", "transfer") == "transfer")
     total_dividends = sum(d["amount"] for d in divs)
-
     cash_balance = cash_in - cash_out - cash_divs - cash_rbs
     transfer_balance = transfer_in - transfer_out - transfer_divs - transfer_rbs
-
-    # Real net balance = gross profit minus partner withdrawals (matches Portal's "available to distribute")
     real_net_balance = net_balance - total_dividends
-
-    # Monthly trend (last 6 months)
     trend = {}
     for t in txs:
-        key = t["date"][:7]  # YYYY-MM
+        key = t["date"][:7]
         if key not in trend:
             trend[key] = {"month": key, "income": 0, "expenses": 0}
         if t["type"] == "income":
@@ -922,15 +849,9 @@ async def dashboard_summary(
         else:
             trend[key]["expenses"] += t["amount"]
     trend_list = sorted(trend.values(), key=lambda x: x["month"])[-6:]
-
-    # Projects count
     in_prog = await db.projects.count_documents({"status": "in_progress"})
     completed = await db.projects.count_documents({"status": "completed"})
-
-    # Recent transactions
     recent = sorted(txs, key=lambda x: x.get("created_at", ""), reverse=True)[:6]
-
-    # Per-partner reimbursements totals (for dashboard widget)
     users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(50)
     users.sort(key=lambda d: d.get("order", 99))
     by_partner = []
@@ -946,7 +867,6 @@ async def dashboard_summary(
             "reimbursements_total": rb_total,
             "dividends_total": div_total,
         })
-
     return {
         "total_income": total_income,
         "total_expenses": total_expenses,
@@ -974,7 +894,6 @@ async def partners_portal(_: dict = Depends(get_current_user)):
     rbs = await db.reimbursements.find({}, {"_id": 0}).to_list(2000)
     users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(50)
     users.sort(key=lambda d: d.get("order", 99))
-
     total_income = sum(t["amount"] for t in txs if t["type"] == "income")
     total_expenses = sum(t["amount"] for t in txs if t["type"] == "expense")
     net_balance = total_income - total_expenses
@@ -983,25 +902,16 @@ async def partners_portal(_: dict = Depends(get_current_user)):
     total_dividends = sum(d["amount"] for d in divs)
     total_reimbursements = sum(r["amount"] for r in rbs)
     available_to_distribute = net_balance - total_dividends
-
-    # Load alert settings (defaults if not set)
     alert_doc = await db.settings_loan_alerts.find_one({"key": "default"}, {"_id": 0}) or {}
     threshold_amount = float(alert_doc.get("threshold_amount", 5000.0))
     threshold_days = int(alert_doc.get("threshold_days", 30))
-
-    # Build per-tx reimbursed amount (handles partials + legacy)
     reimbursed_map = await _reimbursed_amount_by_tx()
     today = datetime.now(timezone.utc).date()
-
     partners_data = []
     for u in users:
         pid = u["id"]
-        personal_txs = [
-            t for t in txs
-            if t["partner_id"] == pid and t.get("paid_personally") and t["type"] == "expense"
-        ]
+        personal_txs = [t for t in txs if t["partner_id"] == pid and t.get("paid_personally") and t["type"] == "expense"]
         personal_total = sum(float(t["amount"]) for t in personal_txs)
-        # Partials-aware reimbursed_total: cap per-tx at its own amount
         reimbursed_per_partner = 0.0
         partner_alerts = []
         for t in personal_txs:
@@ -1011,7 +921,6 @@ async def partners_portal(_: dict = Depends(get_current_user)):
             reimbursed_per_partner += applied
             remaining = round(amt - applied, 2)
             if remaining > 0.005:
-                # compute age in days
                 try:
                     d = datetime.fromisoformat(t["date"]).date() if "T" in t["date"] else datetime.strptime(t["date"], "%Y-%m-%d").date()
                 except Exception:
@@ -1036,7 +945,6 @@ async def partners_portal(_: dict = Depends(get_current_user)):
         cash_reimbursed = sum(float(r["amount"]) for r in rbs if r["partner_id"] == pid)
         dividends_withdrawn = sum(float(d["amount"]) for d in divs if d["partner_id"] == pid)
         available = per_partner_share + outstanding - dividends_withdrawn
-        # Sort alerts: critical first, then by remaining desc
         partner_alerts.sort(key=lambda a: (0 if a["severity"] == "critical" else 1, -a["remaining"]))
         partners_data.append({
             "id": pid,
@@ -1056,17 +964,13 @@ async def partners_portal(_: dict = Depends(get_current_user)):
             "alerts_count": len(partner_alerts),
             "has_critical_alert": any(a["severity"] == "critical" for a in partner_alerts),
         })
-
     return {
         "net_balance": net_balance,
         "per_partner_share": per_partner_share,
         "total_dividends_withdrawn": total_dividends,
         "total_reimbursements_paid": total_reimbursements,
         "available_to_distribute": available_to_distribute,
-        "alert_settings": {
-            "threshold_amount": threshold_amount,
-            "threshold_days": threshold_days,
-        },
+        "alert_settings": {"threshold_amount": threshold_amount, "threshold_days": threshold_days},
         "partners": partners_data,
     }
 
@@ -1085,24 +989,15 @@ async def set_loan_alerts(payload: LoanAlertSettings, user: dict = Depends(get_c
         raise HTTPException(400, "Los umbrales deben ser positivos.")
     await db.settings_loan_alerts.update_one(
         {"key": "default"},
-        {"$set": {
-            "key": "default",
-            "threshold_amount": float(payload.threshold_amount),
-            "threshold_days": int(payload.threshold_days),
-        }},
+        {"$set": {"key": "default", "threshold_amount": float(payload.threshold_amount), "threshold_days": int(payload.threshold_days)}},
         upsert=True,
     )
-    await log_audit("update", "settings", "loan-alerts", user,
-                    f"umbral=${payload.threshold_amount:.2f}/{payload.threshold_days}d")
+    await log_audit("update", "settings", "loan-alerts", user, f"umbral=${payload.threshold_amount:.2f}/{payload.threshold_days}d")
     return payload
 
 # ---------- Hub de Socios ----------
 @api.get("/hub", response_model=List[HubItemOut])
-async def list_hub(
-    type: Optional[str] = None,
-    q: Optional[str] = None,
-    _: dict = Depends(get_current_user),
-):
+async def list_hub(type: Optional[str] = None, q: Optional[str] = None, _: dict = Depends(get_current_user)):
     query: dict = {}
     if type:
         query["type"] = type
@@ -1115,7 +1010,6 @@ async def list_hub(
 
 @api.get("/hub/counts")
 async def hub_counts(_: dict = Depends(get_current_user)):
-    """Returns counts per type (independent of any active filter)."""
     out = {"all": await db.hub_items.count_documents({})}
     for t in ("note", "credential", "link", "file"):
         out[t] = await db.hub_items.count_documents({"type": t})
@@ -1154,7 +1048,6 @@ async def delete_hub(item_id: str, user: dict = Depends(get_current_user)):
 
 # ---------- Operación: gastos fijos recurrentes ----------
 def _parse_iso_date(s: str):
-    """Best-effort ISO date parsing → date object."""
     if not s:
         return None
     try:
@@ -1163,7 +1056,6 @@ def _parse_iso_date(s: str):
         return None
 
 def _classify_frequency(avg_days: float) -> tuple:
-    """Returns (label, is_recurring, monthly_factor) given avg interval in days."""
     if avg_days <= 0:
         return ("Único", False, 0.0)
     if 6 <= avg_days <= 9:
@@ -1185,47 +1077,25 @@ def _classify_frequency(avg_days: float) -> tuple:
     return ("Irregular", False, 30.0 / avg_days if avg_days else 0.0)
 
 @api.get("/operations/recurring")
-async def operations_recurring(
-    months_back: int = 12,
-    _: dict = Depends(get_current_user),
-):
-    """Detect recurring operational expenses (without project) grouped by provider.
-
-    Returns:
-      - groups: per-provider detection with avg amount/interval, last/next dates, status
-      - total_monthly_estimate: sum of avg amounts normalized to monthly
-      - upcoming_count: groups whose next expected pago is within 7 days
-      - overdue_count: groups whose next expected pago is overdue >7 days
-    """
+async def operations_recurring(months_back: int = 12, _: dict = Depends(get_current_user)):
     today = datetime.now(timezone.utc).date()
     cutoff = today.toordinal() - int(months_back) * 30
-    # Pull operational expenses: type=expense + project_id null + paid_personally false
     txs = await db.transactions.find(
         {"type": "expense", "paid_personally": False},
         {"_id": 0, "id": 1, "amount": 1, "date": 1, "provider_id": 1, "project_id": 1, "description": 1, "category": 1, "payment_method": 1},
     ).to_list(20000)
-    operational = [
-        t for t in txs
-        if (not t.get("project_id")) and t.get("provider_id")
-    ]
-    # Filter by cutoff
+    operational = [t for t in txs if (not t.get("project_id")) and t.get("provider_id")]
     operational_in_range = []
     for t in operational:
         d = _parse_iso_date(t.get("date", ""))
         if d and d.toordinal() >= cutoff:
             operational_in_range.append({**t, "_d": d})
-    # Load providers for names
     provider_ids = list({t["provider_id"] for t in operational_in_range})
-    provs = await db.providers.find(
-        {"id": {"$in": provider_ids}}, {"_id": 0, "id": 1, "name": 1, "rfc": 1}
-    ).to_list(len(provider_ids) or 1)
+    provs = await db.providers.find({"id": {"$in": provider_ids}}, {"_id": 0, "id": 1, "name": 1, "rfc": 1}).to_list(len(provider_ids) or 1)
     prov_by_id = {p["id"]: p for p in provs}
-
-    # Group by provider
     groups_map: dict = {}
     for t in operational_in_range:
         groups_map.setdefault(t["provider_id"], []).append(t)
-
     out_groups = []
     total_monthly = 0.0
     upcoming = 0
@@ -1245,15 +1115,11 @@ async def operations_recurring(
             intervals = []
             avg_interval = 0
         label, is_recurring, monthly_factor = _classify_frequency(avg_interval)
-
-        # Predict next expected date
         if is_recurring:
             next_expected = last_d.fromordinal(last_d.toordinal() + round(avg_interval))
         else:
             next_expected = None
         days_until = (next_expected - today).days if next_expected else None
-
-        # Status
         if not is_recurring:
             status = "irregular"
         elif days_until is None:
@@ -1269,19 +1135,14 @@ async def operations_recurring(
             upcoming += 1
         else:
             status = "on_track"
-
-        # Monthly estimate contribution (use avg amount × monthly_factor)
         if is_recurring:
             total_monthly += avg_amt * monthly_factor
-
         prov = prov_by_id.get(pid, {})
-        # Pick most-used category in this group
         cats = [x.get("category") or "general" for x in items]
         cat_counts = {}
         for c in cats:
             cat_counts[c] = cat_counts.get(c, 0) + 1
         top_category = max(cat_counts, key=cat_counts.get) if cat_counts else "general"
-
         out_groups.append({
             "provider_id": pid,
             "provider_name": prov.get("name") or "Proveedor eliminado",
@@ -1300,11 +1161,8 @@ async def operations_recurring(
             "recent_amounts": [round(a, 2) for a in amounts[-6:]],
             "monthly_factor": round(monthly_factor, 3),
         })
-
-    # Sort: overdue first, then due/upcoming, then on_track, then irregular; within each by next date asc
     rank = {"overdue": 0, "due": 1, "upcoming": 2, "on_track": 3, "irregular": 4, "unknown": 5}
     out_groups.sort(key=lambda g: (rank.get(g["status"], 9), g.get("days_until_next") if g.get("days_until_next") is not None else 9999))
-
     return {
         "groups": out_groups,
         "total_monthly_estimate": round(total_monthly, 2),
@@ -1370,6 +1228,7 @@ async def upload_file(file: UploadFile = File(...), user: dict = Depends(get_cur
     record = {
         "id": file_id,
         "storage_path": result["path"],
+        "storage_url": result.get("url"),
         "original_filename": file.filename,
         "content_type": content_type,
         "size": result.get("size", len(data)),
@@ -1396,7 +1255,6 @@ async def download_file(
     authorization: Optional[str] = Header(None),
     auth: Optional[str] = Query(None),
 ):
-    # Custom auth: accept either header or query param
     token = None
     if authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
@@ -1464,11 +1322,8 @@ CATEGORY_LABEL = {
     "services": "Servicios", "other": "Otros",
 }
 STATUS_LABEL_ES = {
-    "in_progress": "En progreso",
-    "started": "Iniciado",
-    "paid": "Pagado",
-    "with_debt": "Con adeudo",
-    "completed": "Finalizado",
+    "in_progress": "En progreso", "started": "Iniciado", "paid": "Pagado",
+    "with_debt": "Con adeudo", "completed": "Finalizado",
 }
 ACTION_LABEL_ES = {"create": "Creación", "update": "Edición", "delete": "Eliminación"}
 ENTITY_LABEL_ES = {
@@ -1476,15 +1331,9 @@ ENTITY_LABEL_ES = {
     "reimbursement": "Reembolso", "file": "Archivo", "client": "Cliente", "provider": "Proveedor",
 }
 
-
 def _export_response(content: bytes, filename: str, fmt: str) -> Response:
     media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if fmt == "xlsx" else "application/pdf"
-    return Response(
-        content=content,
-        media_type=media,
-        headers={"Content-Disposition": f'attachment; filename="{filename}.{fmt}"'},
-    )
-
+    return Response(content=content, media_type=media, headers={"Content-Disposition": f'attachment; filename="{filename}.{fmt}"'})
 
 async def _resolve_lookup_maps():
     partners = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(100)
@@ -1497,7 +1346,6 @@ async def _resolve_lookup_maps():
         {c["id"]: c.get("name", "") for c in clients},
         {p["id"]: p.get("name", "") for p in providers},
     )
-
 
 @api.get("/exports/transactions")
 async def export_transactions(
@@ -1535,7 +1383,6 @@ async def export_transactions(
     content = to_xlsx(title, headers, rows) if format == "xlsx" else to_pdf(title, headers, rows)
     return _export_response(content, f"ingresos_egresos_{datetime.now().strftime('%Y%m%d')}", format)
 
-
 @api.get("/exports/projects")
 async def export_projects(
     format: str = Query("xlsx", regex="^(xlsx|pdf)$"),
@@ -1551,8 +1398,6 @@ async def export_projects(
     projects = await db.projects.find(query, {"_id": 0}).sort("created_at", -1).to_list(2000)
     txs = await db.transactions.find({}, {"_id": 0}).to_list(20000)
     _, _, clients_m, _ = await _resolve_lookup_maps()
-
-    # Precompute pnl
     income_by = {}
     expense_by = {}
     for t in txs:
@@ -1562,13 +1407,10 @@ async def export_projects(
             income_by[pid] = income_by.get(pid, 0) + t["amount"]
         else:
             expense_by[pid] = expense_by.get(pid, 0) + t["amount"]
-
-    # Build dynamic status labels from settings catalog
     cat = await db.settings_catalogs.find_one({"key": "project_statuses"}, {"_id": 0, "items": 1})
     status_labels = {it["value"]: it["label"] for it in (cat or {}).get("items", [])} if cat else dict(STATUS_LABEL_ES)
     for k, v in STATUS_LABEL_ES.items():
         status_labels.setdefault(k, v)
-
     headers = ["Proyecto", "Cliente", "Estado", "Inicio", "Cierre", "Ingresos", "Egresos", "Utilidad"]
     rows = []
     for p in projects:
@@ -1588,13 +1430,8 @@ async def export_projects(
     content = to_xlsx(title, headers, rows) if format == "xlsx" else to_pdf(title, headers, rows)
     return _export_response(content, f"proyectos_{datetime.now().strftime('%Y%m%d')}", format)
 
-
 @api.get("/exports/clients")
-async def export_clients(
-    format: str = Query("xlsx", regex="^(xlsx|pdf)$"),
-    q: Optional[str] = None,
-    _: dict = Depends(get_current_user),
-):
+async def export_clients(format: str = Query("xlsx", regex="^(xlsx|pdf)$"), q: Optional[str] = None, _: dict = Depends(get_current_user)):
     query = {"name": {"$regex": re.escape(q), "$options": "i"}} if q else {}
     docs = await db.clients.find(query, {"_id": 0}).sort("name", 1).to_list(5000)
     headers = ["Nombre", "RFC", "Contacto", "Email", "Teléfono", "Notas"]
@@ -1603,13 +1440,8 @@ async def export_clients(
     content = to_xlsx(title, headers, rows) if format == "xlsx" else to_pdf(title, headers, rows)
     return _export_response(content, f"clientes_{datetime.now().strftime('%Y%m%d')}", format)
 
-
 @api.get("/exports/providers")
-async def export_providers(
-    format: str = Query("xlsx", regex="^(xlsx|pdf)$"),
-    q: Optional[str] = None,
-    _: dict = Depends(get_current_user),
-):
+async def export_providers(format: str = Query("xlsx", regex="^(xlsx|pdf)$"), q: Optional[str] = None, _: dict = Depends(get_current_user)):
     query = {"name": {"$regex": re.escape(q), "$options": "i"}} if q else {}
     docs = await db.providers.find(query, {"_id": 0}).sort("name", 1).to_list(5000)
     headers = ["Nombre", "RFC", "Categoría", "Contacto", "Email", "Teléfono", "Notas"]
@@ -1620,7 +1452,6 @@ async def export_providers(
     title = "Proveedores"
     content = to_xlsx(title, headers, rows) if format == "xlsx" else to_pdf(title, headers, rows)
     return _export_response(content, f"proveedores_{datetime.now().strftime('%Y%m%d')}", format)
-
 
 @api.get("/exports/audit")
 async def export_audit(
@@ -1654,7 +1485,6 @@ async def export_audit(
     content = to_xlsx(title, headers, rows) if format == "xlsx" else to_pdf(title, headers, rows)
     return _export_response(content, f"auditoria_{datetime.now().strftime('%Y%m%d')}", format)
 
-
 @api.get("/exports/partners")
 async def export_partners(
     format: str = Query("xlsx", regex="^(xlsx|pdf)$"),
@@ -1662,7 +1492,6 @@ async def export_partners(
     kind: Optional[str] = Query(None, regex="^(dividends|reimbursements|all)$"),
     _: dict = Depends(get_current_user),
 ):
-    """Exports partner movements: dividends, reimbursements, or both (default both)."""
     q = {}
     if partner_id: q["partner_id"] = partner_id
     partners_m, _, _, _ = await _resolve_lookup_maps()
@@ -1670,33 +1499,17 @@ async def export_partners(
     if not kind or kind in ("dividends", "all"):
         divs = await db.dividends.find(q, {"_id": 0}).sort("date", -1).to_list(2000)
         for d in divs:
-            rows.append([
-                fmt_date_short(d.get("date")),
-                "Retiro",
-                partners_m.get(d.get("partner_id"), ""),
-                PAYMENT_LABEL.get(d.get("payment_method", "transfer"), ""),
-                d.get("description", ""),
-                fmt_currency(d.get("amount", 0)),
-            ])
+            rows.append([fmt_date_short(d.get("date")), "Retiro", partners_m.get(d.get("partner_id"), ""), PAYMENT_LABEL.get(d.get("payment_method", "transfer"), ""), d.get("description", ""), fmt_currency(d.get("amount", 0))])
     if not kind or kind in ("reimbursements", "all"):
         rbs = await db.reimbursements.find(q, {"_id": 0}).sort("date", -1).to_list(2000)
         for r in rbs:
-            rows.append([
-                fmt_date_short(r.get("date")),
-                "Reembolso",
-                partners_m.get(r.get("partner_id"), ""),
-                PAYMENT_LABEL.get(r.get("payment_method", "transfer"), ""),
-                r.get("description", ""),
-                fmt_currency(r.get("amount", 0)),
-            ])
+            rows.append([fmt_date_short(r.get("date")), "Reembolso", partners_m.get(r.get("partner_id"), ""), PAYMENT_LABEL.get(r.get("payment_method", "transfer"), ""), r.get("description", ""), fmt_currency(r.get("amount", 0))])
     rows.sort(key=lambda r: r[0], reverse=True)
     headers = ["Fecha", "Tipo", "Socio", "Método", "Descripción", "Monto"]
     title = "Movimientos de socios"
     content = to_xlsx(title, headers, rows) if format == "xlsx" else to_pdf(title, headers, rows)
     return _export_response(content, f"socios_{datetime.now().strftime('%Y%m%d')}", format)
 
-
-# Custom auth helper for export downloads via <a href> query param
 async def _auth_from_query_or_header(authorization: Optional[str], auth: Optional[str]) -> dict:
     token = None
     if authorization and authorization.startswith("Bearer "):
@@ -1726,15 +1539,11 @@ PARTNER_AVATARS = [
     "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTkwNzc3Nnww&ixlib=rb-4.1.0&q=85",
     "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTkwNzc3Nnww&ixlib=rb-4.1.0&q=85",
 ]
-
-# Old demo accounts to clean up (one-time migration)
 LEGACY_EMAILS = ["carlos@socios.com", "ana@socios.com", "diego@socios.com"]
 
 async def seed_partners():
-    # Remove legacy demo users (clean migration)
     for legacy_email in LEGACY_EMAILS:
         await db.users.delete_one({"email": legacy_email})
-
     for i in range(3):
         email = os.environ.get(f"PARTNER_{i+1}_EMAIL", f"partner{i+1}@socios.com").lower()
         password = os.environ.get(f"PARTNER_{i+1}_PASSWORD", "Bienvenido2026!")
@@ -1754,16 +1563,9 @@ async def seed_partners():
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
         else:
-            # Keep existing user but ensure metadata is current (don't touch password)
             await db.users.update_one(
                 {"email": email},
-                {"$set": {
-                    "name": name,
-                    "color": PARTNER_COLORS[i],
-                    "avatar_url": PARTNER_AVATARS[i],
-                    "order": i + 1,
-                    "role": "partner",
-                }},
+                {"$set": {"name": name, "color": PARTNER_COLORS[i], "avatar_url": PARTNER_AVATARS[i], "order": i + 1, "role": "partner"}},
             )
 
 # ---------- Settings catalogs ----------
@@ -1802,7 +1604,7 @@ DEFAULT_CATALOGS: dict = {
 class CatalogItem(BaseModel):
     value: str
     label: str
-    color: Optional[str] = None  # optional palette key for items that support it
+    color: Optional[str] = None
 
 class SettingsCatalogIn(BaseModel):
     items: List[CatalogItem]
@@ -1853,13 +1655,9 @@ async def update_catalog(key: str, payload: SettingsCatalogIn, user: dict = Depe
         raise HTTPException(status_code=400, detail="Los identificadores deben ser únicos")
     if not items:
         raise HTTPException(status_code=400, detail="El catálogo no puede estar vacío")
-    await db.settings_catalogs.update_one(
-        {"key": key}, {"$set": {"key": key, "items": items}}, upsert=True,
-    )
+    await db.settings_catalogs.update_one({"key": key}, {"$set": {"key": key, "items": items}}, upsert=True)
     await log_audit("update", "settings", key, user, f"Catálogo {CATALOG_LABELS[key]}")
     return SettingsCatalogOut(key=key, items=items, label=CATALOG_LABELS[key])
-
-
 
 @app.on_event("startup")
 async def on_startup():
@@ -1875,7 +1673,6 @@ async def on_startup():
     await db.settings_catalogs.create_index("key", unique=True)
     await seed_partners()
     await seed_settings_catalogs()
-    # Backfill project codes for any existing project without one
     cursor = db.projects.find({"$or": [{"code": {"$exists": False}}, {"code": None}]}, {"_id": 0, "id": 1, "created_at": 1})
     legacy = await cursor.to_list(10000)
     legacy.sort(key=lambda p: p.get("created_at", ""))
