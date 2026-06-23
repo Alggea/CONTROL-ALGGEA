@@ -27,7 +27,7 @@ export const fmtMXN = (n) => {
 
 export const fmtDate = (d) => {
   if (!d) return "—";
-  const date = typeof d === "string" ? new Date(d) : d;
+  const date = typeof d === "string" ? new Date(d + "T12:00:00") : d;
   return new Intl.DateTimeFormat("es-MX", {
     day: "2-digit",
     month: "short",
