@@ -48,13 +48,13 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
     )
     return {"path": result["public_id"], "size": result.get("bytes", len(data)), "url": result["secure_url"]}
 
-def get_object(path: str) -> tuple:
-    resource_type = "raw" if path.endswith(".pdf") or "pdf" in path else "image"
+def get_object(path: str, content_type: str = "") -> tuple:
+    resource_type = "raw" if "pdf" in content_type.lower() or path.endswith(".pdf") or "pdf" in path.lower() else "image"
     url, _ = cloudinary.utils.cloudinary_url(path, resource_type=resource_type, secure=True)
     resp = requests.get(url, timeout=60)
     resp.raise_for_status()
-    content_type = resp.headers.get("Content-Type", "application/octet-stream")
-    return resp.content, content_type
+    ct = resp.headers.get("Content-Type", content_type or "application/octet-stream")
+    return resp.content, ct
 
 def init_storage():
     pass  # No initialization needed for Cloudinary
@@ -1272,7 +1272,7 @@ async def download_file(
     rec = await db.files.find_one({"id": file_id, "is_deleted": False}, {"_id": 0})
     if not rec:
         raise HTTPException(404, "Archivo no encontrado")
-    data, content_type = get_object(rec["storage_path"])
+    data, content_type = get_object(rec["storage_path"], rec.get("content_type", ""))
     return StreamingResponse(
         io.BytesIO(data),
         media_type=rec.get("content_type", content_type),
