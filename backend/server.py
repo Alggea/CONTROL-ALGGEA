@@ -1539,7 +1539,7 @@ PARTNER_AVATARS = [
     "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTkwNzc3Nnww&ixlib=rb-4.1.0&q=85",
     "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzh8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTkwNzc3Nnww&ixlib=rb-4.1.0&q=85",
 ]
-LEGACY_EMAILS = ["carlos@socios.com", "ana@socios.com", "diego@socios.com"]
+LEGACY_EMAILS = ["carlos@socios.com", "diego@socios.com"]
 
 async def seed_partners():
     for legacy_email in LEGACY_EMAILS:
