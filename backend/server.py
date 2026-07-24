@@ -1565,7 +1565,7 @@ async def seed_partners():
         else:
             await db.users.update_one(
                 {"email": email},
-                {"$set": {"name": name, "color": PARTNER_COLORS[i], "avatar_url": PARTNER_AVATARS[i], "order": i + 1, "role": "partner"}},
+                {"$set": {"name": name, "color": PARTNER_COLORS[i], "order": i + 1, "role": "partner"}},
             )
 
 # ---------- Settings catalogs ----------
